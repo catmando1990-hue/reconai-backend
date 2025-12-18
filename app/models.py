@@ -1,0 +1,136 @@
+# app/models.py
+
+from __future__ import annotations
+
+import datetime
+from typing import List, Optional, Literal, Dict
+
+from pydantic import BaseModel
+
+
+# -----------------------------
+# Core transaction models
+# -----------------------------
+
+class Transaction(BaseModel):
+    # Optional unique ID so feedback can remind a specific transaction.
+    id: Optional[str] = None
+    date: Optional[datetime.date] = None
+    amount: float
+    description: str
+    merchant: Optional[str] = None
+    original_category: Optional[str] = None
+
+    # ✅ NEW (Option 2)
+    classification: Optional[Literal["business", "personal", "transfer", "uncertain"]] = None
+    reason: Optional[str] = None
+
+
+
+class TransactionsRequest(BaseModel):
+    """
+    Flexible input model for ReconAI.
+
+    - source_type:
+        "structured" = client sends JSON list of Transaction objects
+        "csv"        = client sends raw CSV text (one transaction per line)
+        "text"       = client sends semi-structured text; we try to parse lines
+    - goal:
+        "general_analysis"  = just stats & breakdowns
+        "business_expenses" = focus on business vs personal
+        "tax_prep"          = tax-oriented summary (still heuristic for now)
+    """
+    source_type: Literal["structured", "csv", "text"] = "structured"
+    goal: Literal["general_analysis", "business_expenses", "tax_prep"] = "business_expenses"
+
+    transactions: Optional[List[Transaction]] = None
+    raw_text: Optional[str] = None
+
+
+class TransactionsResponse(BaseModel):
+    """
+    NOTE: schema_version bumped because we added transfers bucket.
+    """
+    schema_version: str = "1.1.0"
+    total_transactions: int
+    total_outflow: float
+    total_inflow: float
+    net: float
+
+    business_expenses: List[Transaction]
+    personal_expenses: List[Transaction]
+    transfers: List[Transaction]
+    uncertain: List[Transaction]
+
+    summary_notes: List[str]
+
+
+# -----------------------------
+# Plaid-related models
+# -----------------------------
+
+class LinkTokenRequest(BaseModel):
+    user_id: str = "test-user"
+
+
+class PublicTokenExchangeRequest(BaseModel):
+    user_id: str = "test-user"
+    public_token: str
+
+
+# -----------------------------
+# Accounting / Tax / Credit models
+# -----------------------------
+
+class AccountingSummaryResponse(BaseModel):
+    total_income: float
+    total_expenses: float
+    net: float
+    by_category: Dict[str, float]
+    notes: List[str]
+
+
+class TaxCategorySummary(BaseModel):
+    label: str
+    amount: float
+    note: Optional[str] = None
+
+
+class TaxAnalysisResponse(BaseModel):
+    estimated_business_expenses: float
+    potential_deductions: List[TaxCategorySummary]
+    risky_items: List[Transaction]
+    notes: List[str]
+
+
+class CreditFactor(BaseModel):
+    name: str
+    status: str
+    detail: Optional[str] = None
+
+
+class CreditAnalysisResponse(BaseModel):
+    summary: str
+    factors: List[CreditFactor]
+    suggested_actions: List[str]
+
+
+# -----------------------------
+# Feedback models
+# -----------------------------
+
+# Keep your original tx feedback model but allow "transfer" too
+class FeedbackRequest(BaseModel):
+    tx_id: str
+    correct_label: Literal["business", "personal", "transfer", "uncertain"]
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    message: str
+
+
+# Merchant feedback (learning loop)
+class MerchantFeedbackRequest(BaseModel):
+    merchant: str
+    correct_label: Literal["business", "personal", "transfer", "uncertain"]
