@@ -1,33 +1,73 @@
 from fastapi import APIRouter
-
-from app.models import Transaction, TransactionsResponse
+from app.reconai_core.brain import ReconAIBrain
+from app.models import TransactionsRequest
 
 router = APIRouter(prefix="/reconai", tags=["reconai"])
 
 
-@router.get("/demo", response_model=TransactionsResponse)
+@router.get("/demo")
 def demo():
-    demo_rows = [
-        Transaction(date="2025-12-11", merchant="AWS", description="Amazon Web Services", amount=-89.22, original_category="software"),
-        Transaction(date="2025-12-12", merchant="Shell", description="Shell Fuel", amount=-52.10, original_category="fuel"),
-        Transaction(date="2025-12-13", merchant="Starbucks", description="Starbucks", amount=-18.45, original_category="food"),
-        Transaction(date="2025-12-14", merchant="ACME Corp", description="Client Invoice Payment", amount=2500.00, original_category="income"),
-        Transaction(date="2025-12-15", merchant="Staples", description="Office Supplies", amount=-219.99, original_category="office"),
-        Transaction(date="2025-12-16", merchant="Hilton", description="Hotel Stay", amount=-120.00, original_category="travel"),
-        Transaction(date="2025-12-17", merchant="Zoom", description="Subscription", amount=-39.99, original_category="software"),
-    ]
+    """
+    Demo endpoint that runs sample data through the REAL ReconAI brain.
+    This mirrors production behavior exactly.
+    """
 
-    # Minimal “already analyzed” response matching your frontend expectation
-    # You can later swap this to call your real brain.
-    return TransactionsResponse(
-        schema_version="1.1.0",
-        total_transactions=len(demo_rows),
-        total_outflow=round(sum(x.amount for x in demo_rows if x.amount < 0), 2),
-        total_inflow=round(sum(x.amount for x in demo_rows if x.amount > 0), 2),
-        net=round(sum(x.amount for x in demo_rows), 2),
-        business_expenses=demo_rows,   # keeping it simple for now
-        personal_expenses=[],
-        transfers=[],
-        uncertain=[],
-        summary_notes=["Demo endpoint: static sample data."],
+    brain = ReconAIBrain()
+
+    payload = TransactionsRequest(
+        source_type="structured",
+        goal="business_expenses",
+        transactions=[
+            {
+                "date": "2025-12-11",
+                "amount": -89.22,
+                "description": "Amazon Web Services",
+                "merchant": "AWS",
+                "original_category": "software",
+            },
+            {
+                "date": "2025-12-12",
+                "amount": -52.10,
+                "description": "Shell Fuel",
+                "merchant": "Shell",
+                "original_category": "fuel",
+            },
+            {
+                "date": "2025-12-13",
+                "amount": -18.45,
+                "description": "Starbucks",
+                "merchant": "Starbucks",
+                "original_category": "food",
+            },
+            {
+                "date": "2025-12-14",
+                "amount": 2500.00,
+                "description": "Client Invoice Payment",
+                "merchant": "ACME Corp",
+                "original_category": "income",
+            },
+            {
+                "date": "2025-12-15",
+                "amount": -219.99,
+                "description": "Office Supplies",
+                "merchant": "Staples",
+                "original_category": "office",
+            },
+            {
+                "date": "2025-12-16",
+                "amount": -120.00,
+                "description": "Hotel Stay",
+                "merchant": "Hilton",
+                "original_category": "travel",
+            },
+            {
+                "date": "2025-12-17",
+                "amount": -39.99,
+                "description": "Subscription",
+                "merchant": "Zoom",
+                "original_category": "software",
+            },
+        ],
     )
+
+    return brain.analyze_transactions(payload)
