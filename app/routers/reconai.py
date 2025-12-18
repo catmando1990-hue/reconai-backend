@@ -1,12 +1,15 @@
-from fastapi import APIRouter
+# app/routers/reconai.py
+
+from fastapi import APIRouter, Body
 from app.reconai_core.brain import ReconAIBrain
-from app.models import TransactionsRequest
+from app.models import TransactionsRequest, TransactionsResponse
 
 router = APIRouter(prefix="/reconai", tags=["reconai"])
 
 
-@router.get("/demo")
+@router.get("/demo", response_model=TransactionsResponse)
 def demo():
+    """Demo endpoint that runs sample data through ReconAIBrain."""
     brain = ReconAIBrain()
 
     payload = TransactionsRequest(
@@ -65,4 +68,13 @@ def demo():
         ],
     )
 
+    return brain.analyze_transactions(payload)
+
+
+@router.post("/analyze", response_model=TransactionsResponse)
+def analyze(payload: TransactionsRequest = Body(...)):
+    """
+    Analyze raw input (csv/text/structured) via ReconAIBrain.
+    """
+    brain = ReconAIBrain()
     return brain.analyze_transactions(payload)

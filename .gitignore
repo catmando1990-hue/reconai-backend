@@ -1,6 +1,18 @@
+# VS Code
+.vscode/
 
-Microsoft VS Code/
+# Python
+venv/
+__pycache__/
+*.pyc
 
+# Databases & storage
+*.db
+data/
 
-Microsoft VS Code/
+# Backups
+*.bak
 
+# Environment files
+.env
+.env.local
