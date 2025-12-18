@@ -7,11 +7,6 @@ router = APIRouter(prefix="/reconai", tags=["reconai"])
 
 @router.get("/demo")
 def demo():
-    """
-    Demo endpoint that runs sample data through the REAL ReconAI brain.
-    This mirrors production behavior exactly.
-    """
-
     brain = ReconAIBrain()
 
     payload = TransactionsRequest(
