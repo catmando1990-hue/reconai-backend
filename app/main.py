@@ -18,45 +18,37 @@ from app.routers.feedback import router as feedback_router
 from app.routers.plaid import router as plaid_router
 
 
-def _get_allowed_origins() -> list[str]:
-    """
-    Allow local dev frontend + your deployed frontend (if you add it).
-    You can also override via CORS_ORIGINS env var:
-      CORS_ORIGINS="http://localhost:3000,https://your-frontend.com"
-    """
+def get_allowed_origins() -> list[str]:
     env = os.getenv("CORS_ORIGINS", "").strip()
     if env:
         return [o.strip() for o in env.split(",") if o.strip()]
 
-    # Default safe origins
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        # Add your deployed frontend domain here when you deploy it:
-        # "https://reconai-frontend.onrender.com",
-        # or your custom domain:
-        # "https://reconai.yourdomain.com",
+        # add deployed frontend later if needed
     ]
 
 
+# ✅ CREATE APP ONCE
 app = FastAPI(title="ReconAI Backend MVP", version="0.1.0")
 
-# --- CORS (THIS FIXES YOUR ERROR) ---
+# ✅ ADD CORS ONCE (AFTER app exists)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_get_allowed_origins(),
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Optional: silence Render HEAD / 405
+# ✅ Root + HEAD (fixes Render 405 noise)
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"status": "ok", "service": "reconai-backend"}
 
 
-# Include routers
+# ✅ INCLUDE ROUTERS ONCE
 app.include_router(files_router)
 app.include_router(exports_router)
 app.include_router(reconai_router)
