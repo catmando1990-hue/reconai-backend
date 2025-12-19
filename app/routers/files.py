@@ -66,6 +66,27 @@ def _to_csv_row(date: str, desc: str, amt: str) -> str:
     return f'"{date}","{desc}","{amt}"\n'
 
 
+def _empty_transactions_response(goal: str, raw_text: Optional[str] = None) -> dict:
+    """
+    Return a valid empty analysis response (HTTP 200) so the frontend doesn't error
+    when we can't extract transactions from a PDF/image.
+    """
+    return {
+        "schema_version": "1.0.0",
+        "goal": goal,
+        "total_transactions": 0,
+        "total_inflow": 0,
+        "total_outflow": 0,
+        "net": 0,
+        "transactions": [],
+        "business_expenses": [],
+        "personal_expenses": [],
+        "transfers": [],
+        "uncertain": [],
+        "raw_text": raw_text,
+    }
+
+
 # ----------------------------
 # upload + download
 # ----------------------------
@@ -230,16 +251,21 @@ def analyze_upload(
         from pypdf import PdfReader
 
         reader = PdfReader(str(path))
-        text = "\n".join(
-            page.extract_text() or "" for page in reader.pages[:8]
-        )
+        text_parts = []
+        for page in reader.pages[:8]:
+            try:
+                text_parts.append(page.extract_text() or "")
+            except Exception:
+                continue
+        text = "\n".join(text_parts)
 
+        # heuristic: date + amount on same line
         date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
-        amt_re = re.compile(
-            r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})"
-        )
+        amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
 
         raw_csv = _csv_header()
+        parsed = 0
+
         for ln in text.splitlines():
             ln = ln.strip()
             if not ln:
@@ -248,11 +274,17 @@ def analyze_upload(
             amts = amt_re.findall(ln)
             if not mdate or not amts:
                 continue
-            raw_csv += _to_csv_row(
-                mdate.group(1),
-                ln.replace(mdate.group(1), "").replace(amts[-1], "").strip(),
-                amts[-1],
-            )
+
+            date = mdate.group(1)
+            amt = amts[-1]
+            desc = ln.replace(date, "").replace(amt, "").strip() or "PDF transaction"
+
+            raw_csv += _to_csv_row(date, desc, amt)
+            parsed += 1
+
+        # If we couldn't parse any rows, return a VALID empty response (200 OK)
+        if parsed == 0:
+            return _empty_transactions_response(goal=goal, raw_text=text)
 
         return brain.analyze_transactions(
             TransactionsRequest(
@@ -270,11 +302,11 @@ def analyze_upload(
         text = pytesseract.image_to_string(Image.open(path))
 
         date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
-        amt_re = re.compile(
-            r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})"
-        )
+        amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
 
         raw_csv = _csv_header()
+        parsed = 0
+
         for ln in text.splitlines():
             ln = ln.strip()
             if not ln:
@@ -283,11 +315,16 @@ def analyze_upload(
             amts = amt_re.findall(ln)
             if not mdate or not amts:
                 continue
-            raw_csv += _to_csv_row(
-                mdate.group(1),
-                ln.replace(mdate.group(1), "").replace(amts[-1], "").strip(),
-                amts[-1],
-            )
+
+            date = mdate.group(1)
+            amt = amts[-1]
+            desc = ln.replace(date, "").replace(amt, "").strip() or "OCR transaction"
+
+            raw_csv += _to_csv_row(date, desc, amt)
+            parsed += 1
+
+        if parsed == 0:
+            return _empty_transactions_response(goal=goal, raw_text=text)
 
         return brain.analyze_transactions(
             TransactionsRequest(
