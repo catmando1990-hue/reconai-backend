@@ -1,18 +1,22 @@
 # VS Code
 .vscode/
+Microsoft VS Code/
 
 # Python
 venv/
 __pycache__/
 *.pyc
-
-# Databases & storage
-*.db
-data/
-
-# Backups
-*.bak
+.pytest_cache/
 
 # Environment files
 .env
 .env.local
+
+# Databases & storage (do NOT commit)
+*.db
+data/
+data/uploads/
+data/reconai.db
+
+# Backups
+*.bak
