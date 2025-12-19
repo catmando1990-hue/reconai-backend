@@ -21,10 +21,9 @@ class Transaction(BaseModel):
     merchant: Optional[str] = None
     original_category: Optional[str] = None
 
-    # ✅ NEW (Option 2)
+    # Classification + explanation
     classification: Optional[Literal["business", "personal", "transfer", "uncertain"]] = None
     reason: Optional[str] = None
-
 
 
 class TransactionsRequest(BaseModel):
@@ -49,9 +48,10 @@ class TransactionsRequest(BaseModel):
 
 class TransactionsResponse(BaseModel):
     """
-    NOTE: schema_version bumped because we added transfers bucket.
+    Canonical ReconAI response schema.
     """
     schema_version: str = "1.1.0"
+
     total_transactions: int
     total_outflow: float
     total_inflow: float
@@ -119,7 +119,6 @@ class CreditAnalysisResponse(BaseModel):
 # Feedback models
 # -----------------------------
 
-# Keep your original tx feedback model but allow "transfer" too
 class FeedbackRequest(BaseModel):
     tx_id: str
     correct_label: Literal["business", "personal", "transfer", "uncertain"]
@@ -130,7 +129,6 @@ class FeedbackResponse(BaseModel):
     message: str
 
 
-# Merchant feedback (learning loop)
 class MerchantFeedbackRequest(BaseModel):
     merchant: str
     correct_label: Literal["business", "personal", "transfer", "uncertain"]
