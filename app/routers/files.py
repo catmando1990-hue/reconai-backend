@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -12,8 +11,10 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, Query
 from fastapi.responses import FileResponse
 
 from app.db import DB_PATH, UPLOADS_DIR
-from app.models import TransactionsRequest, TransactionsResponse
+from app.models import TransactionsRequest, TransactionsResponse, Transaction
 from app.reconai_core.brain import ReconAIBrain
+from app.reconai_core.bank_pdf import extract_text_from_pdf, parse_bank_statement_text
+from app.reconai_core.parser import parse_text_lines
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -52,39 +53,23 @@ def _looks_like_image(filename: str, content_type: Optional[str]) -> bool:
     return fn.endswith((".png", ".jpg", ".jpeg")) or ct.startswith("image/")
 
 
-def _csv_header() -> str:
-    return "date,description,amount\n"
-
-
-def _to_csv_row(date: str, desc: str, amt: str) -> str:
-    # minimal CSV escaping
-    desc = (desc or "").replace('"', '""')
-    date = (date or "").replace('"', '""')
-    amt = (amt or "").replace('"', '""')
-    return f'"{date}","{desc}","{amt}"\n'
-
-
-def _empty_transactions_response(goal: str, raw_text: Optional[str] = None) -> TransactionsResponse:
-    """Return a VALID empty response that satisfies TransactionsResponse."""
-    data = {
-        "schema_version": "1.0.0",
-        "goal": goal,
-        "total_transactions": 0,
-        "total_outflow": 0,
-        "total_inflow": 0,
-        "net": 0,
-        "transactions": [],
-        "business_expenses": [],
-        "personal_expenses": [],
-        "transfers": [],
-        "uncertain": [],
-        "summary_notes": [
+def _empty_transactions_response(goal: str, notes: Optional[list[str]] = None) -> TransactionsResponse:
+    """Return a VALID empty TransactionsResponse."""
+    return TransactionsResponse(
+        total_transactions=0,
+        total_outflow=0.0,
+        total_inflow=0.0,
+        net=0.0,
+        business_expenses=[],
+        personal_expenses=[],
+        transfers=[],
+        uncertain=[],
+        summary_notes=notes
+        or [
             "No valid transactions were extracted from this file.",
-            "If this is a PDF statement, the statement may be a scanned image or use a bank-specific layout we haven't tuned yet.",
+            "If this is a PDF statement, it may be scanned (image-based) or use a bank-specific layout we haven't tuned yet.",
         ],
-        "raw_text": raw_text,
-    }
-    return TransactionsResponse.model_validate(data)  # pydantic v2
+    )
 
 
 # ----------------------------
@@ -209,11 +194,10 @@ def analyze_upload(
     Supported:
     - CSV: direct
     - XLSX/XLS: converted to CSV text, then analyzed
-    - PDF: best-effort text extraction + heuristic parsing into CSV, then analyzed
-    - Images (png/jpg/jpeg): OCR (if installed) + heuristic parsing into CSV, then analyzed
+    - PDF: bank-aware extraction -> structured transactions -> analyzed
+    - Images (png/jpg/jpeg): OCR (if installed) -> text parse -> analyzed
 
-    If we can't extract any transactions, we return a valid empty response (200 OK),
-    not a 4xx/5xx.
+    If we can't extract any transactions, we return a valid empty response (200 OK).
     """
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
@@ -251,50 +235,38 @@ def analyze_upload(
         payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw_csv)
         return brain.analyze_transactions(payload)
 
-    # ---------- PDF ----------
+    # ---------- PDF (bank-aware) ----------
     if _looks_like_pdf(filename, content_type):
-        try:
-            from pypdf import PdfReader  # type: ignore
-        except Exception:
-            raise HTTPException(status_code=415, detail="PDF analysis requires pypdf installed")
+        text, pdf_notes = extract_text_from_pdf(str(path), max_pages=12)
+        if not text:
+            # likely scanned / image-based statement (OCR for PDF pages is a separate step)
+            return _empty_transactions_response(goal, notes=pdf_notes)
 
-        reader = PdfReader(str(path))
-        text_parts: list[str] = []
-        for page in reader.pages[:12]:
-            try:
-                text_parts.append(page.extract_text() or "")
-            except Exception:
-                continue
-        text = "\n".join(text_parts).strip()
+        bank_res = parse_bank_statement_text(text)
 
-        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b")
-        amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
+        # If we got structured transactions, analyze them directly
+        if bank_res.transactions:
+            payload = TransactionsRequest(
+                source_type="structured",
+                goal=goal,
+                transactions=bank_res.transactions,
+            )
+            resp = brain.analyze_transactions(payload)
+            # prepend bank notes to summary_notes
+            resp.summary_notes = bank_res.notes + resp.summary_notes
+            return resp
 
-        raw_csv = _csv_header()
-        parsed = 0
+        # Fallback: try generic text-line parsing
+        generic = parse_text_lines(text)
+        if generic.transactions:
+            payload = TransactionsRequest(source_type="structured", goal=goal, transactions=generic.transactions)
+            resp = brain.analyze_transactions(payload)
+            resp.summary_notes = (bank_res.notes + generic.notes) + resp.summary_notes
+            return resp
 
-        for ln in [l.strip() for l in text.splitlines() if l.strip()]:
-            mdate = date_re.search(ln)
-            if not mdate:
-                continue
-            amts = amt_re.findall(ln)
-            if not amts:
-                continue
+        return _empty_transactions_response(goal, notes=(pdf_notes + bank_res.notes))
 
-            date = mdate.group(1)
-            amt = amts[-1]
-            desc = ln.replace(date, "").replace(amt, "").strip() or "PDF transaction"
-
-            raw_csv += _to_csv_row(date, desc, amt)
-            parsed += 1
-
-        if parsed == 0:
-            return _empty_transactions_response(goal=goal, raw_text=text)
-
-        payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw_csv)
-        return brain.analyze_transactions(payload)
-
-    # ---------- IMAGE (OCR) ----------
+    # ---------- IMAGE (OCR -> parse) ----------
     if _looks_like_image(filename, content_type):
         try:
             import pytesseract  # type: ignore
@@ -306,32 +278,14 @@ def analyze_upload(
             )
 
         text = pytesseract.image_to_string(Image.open(str(path))).strip()
+        parsed = parse_text_lines(text)
 
-        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b")
-        amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
+        if not parsed.transactions:
+            return _empty_transactions_response(goal, notes=parsed.notes)
 
-        raw_csv = _csv_header()
-        parsed = 0
-
-        for ln in [l.strip() for l in text.splitlines() if l.strip()]:
-            mdate = date_re.search(ln)
-            if not mdate:
-                continue
-            amts = amt_re.findall(ln)
-            if not amts:
-                continue
-
-            date = mdate.group(1)
-            amt = amts[-1]
-            desc = ln.replace(date, "").replace(amt, "").strip() or "OCR transaction"
-
-            raw_csv += _to_csv_row(date, desc, amt)
-            parsed += 1
-
-        if parsed == 0:
-            return _empty_transactions_response(goal=goal, raw_text=text)
-
-        payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw_csv)
-        return brain.analyze_transactions(payload)
+        payload = TransactionsRequest(source_type="structured", goal=goal, transactions=parsed.transactions)
+        resp = brain.analyze_transactions(payload)
+        resp.summary_notes = parsed.notes + resp.summary_notes
+        return resp
 
     raise HTTPException(status_code=415, detail="Unsupported file type for analysis")
