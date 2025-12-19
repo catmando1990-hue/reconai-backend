@@ -1,3 +1,5 @@
+# app/routers/files.py
+
 from __future__ import annotations
 
 import re
@@ -35,12 +37,7 @@ def _looks_like_csv(filename: str, content_type: Optional[str]) -> bool:
 def _looks_like_excel(filename: str, content_type: Optional[str]) -> bool:
     fn = (filename or "").lower()
     ct = (content_type or "").lower()
-    return (
-        fn.endswith(".xlsx")
-        or fn.endswith(".xls")
-        or ("spreadsheet" in ct)
-        or ("excel" in ct)
-    )
+    return fn.endswith(".xlsx") or fn.endswith(".xls") or ("spreadsheet" in ct) or ("excel" in ct)
 
 
 def _looks_like_pdf(filename: str, content_type: Optional[str]) -> bool:
@@ -60,31 +57,34 @@ def _csv_header() -> str:
 
 
 def _to_csv_row(date: str, desc: str, amt: str) -> str:
+    # minimal CSV escaping
     desc = (desc or "").replace('"', '""')
     date = (date or "").replace('"', '""')
     amt = (amt or "").replace('"', '""')
     return f'"{date}","{desc}","{amt}"\n'
 
 
-def _empty_transactions_response(goal: str, raw_text: Optional[str] = None) -> dict:
-    """
-    Return a valid empty analysis response (HTTP 200) so the frontend doesn't error
-    when we can't extract transactions from a PDF/image.
-    """
-    return {
+def _empty_transactions_response(goal: str, raw_text: Optional[str] = None) -> TransactionsResponse:
+    """Return a VALID empty response that satisfies TransactionsResponse."""
+    data = {
         "schema_version": "1.0.0",
         "goal": goal,
         "total_transactions": 0,
-        "total_inflow": 0,
         "total_outflow": 0,
+        "total_inflow": 0,
         "net": 0,
         "transactions": [],
         "business_expenses": [],
         "personal_expenses": [],
         "transfers": [],
         "uncertain": [],
+        "summary_notes": [
+            "No valid transactions were extracted from this file.",
+            "If this is a PDF statement, the statement may be a scanned image or use a bank-specific layout we haven't tuned yet.",
+        ],
         "raw_text": raw_text,
     }
+    return TransactionsResponse.model_validate(data)  # pydantic v2
 
 
 # ----------------------------
@@ -93,6 +93,7 @@ def _empty_transactions_response(goal: str, raw_text: Optional[str] = None) -> d
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
+    """Upload ANY file (csv, pdf, images, etc)."""
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -106,7 +107,7 @@ async def upload_file(file: UploadFile = File(...)):
     size = 0
     with stored_path.open("wb") as out:
         while True:
-            chunk = await file.read(1024 * 1024)
+            chunk = await file.read(1024 * 1024)  # 1MB chunks
             if not chunk:
                 break
             out.write(chunk)
@@ -134,6 +135,7 @@ async def upload_file(file: UploadFile = File(...)):
 
 @router.get("/{upload_id}")
 def download_file(upload_id: str):
+    """Download the uploaded file by id."""
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             "SELECT filename, content_type, stored_path FROM uploads WHERE id=?",
@@ -158,14 +160,14 @@ def download_file(upload_id: str):
 
 
 # ----------------------------
-# list uploads (handles /files and /files/)
+# list uploads (supports /files and /files/)
 # ----------------------------
 
 @router.get("/", include_in_schema=False)
 @router.get("")
 def list_uploads(limit: int = 50):
+    """List recent uploads."""
     limit = max(1, min(limit, 200))
-
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             """
@@ -193,16 +195,13 @@ def list_uploads(limit: int = 50):
 
 
 # ----------------------------
-# analyze (ALL file types)
+# analyze (all types)
 # ----------------------------
 
 @router.post("/{upload_id}/analyze", response_model=TransactionsResponse)
 def analyze_upload(
     upload_id: str,
-    goal: str = Query(
-        "business_expenses",
-        description="general_analysis | business_expenses | tax_prep",
-    ),
+    goal: str = Query("business_expenses", description="general_analysis | business_expenses | tax_prep"),
 ):
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
@@ -222,57 +221,52 @@ def analyze_upload(
 
     brain = ReconAIBrain()
 
-    # ---- CSV ----
+    # ---------- CSV ----------
     if _looks_like_csv(filename, content_type):
         raw = path.read_text(encoding="utf-8-sig", errors="replace")
-        return brain.analyze_transactions(
-            TransactionsRequest(
-                source_type="csv",
-                goal=goal,
-                raw_text=raw,
-            )
-        )
+        payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw)
+        return brain.analyze_transactions(payload)
 
-    # ---- EXCEL ----
+    # ---------- EXCEL ----------
     if _looks_like_excel(filename, content_type):
-        import pandas as pd
+        try:
+            import pandas as pd  # type: ignore
+        except Exception:
+            raise HTTPException(status_code=415, detail="Excel analysis requires pandas + openpyxl installed")
+
         df = pd.read_excel(path)
         raw_csv = df.to_csv(index=False)
-        return brain.analyze_transactions(
-            TransactionsRequest(
-                source_type="csv",
-                goal=goal,
-                raw_text=raw_csv,
-            )
-        )
+        payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw_csv)
+        return brain.analyze_transactions(payload)
 
-    # ---- PDF ----
+    # ---------- PDF ----------
     if _looks_like_pdf(filename, content_type):
-        from pypdf import PdfReader
+        try:
+            from pypdf import PdfReader  # type: ignore
+        except Exception:
+            raise HTTPException(status_code=415, detail="PDF analysis requires pypdf installed")
 
         reader = PdfReader(str(path))
-        text_parts = []
-        for page in reader.pages[:8]:
+        text_parts: list[str] = []
+        for page in reader.pages[:12]:
             try:
                 text_parts.append(page.extract_text() or "")
             except Exception:
                 continue
-        text = "\n".join(text_parts)
+        text = "\n".join(text_parts).strip()
 
-        # heuristic: date + amount on same line
-        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
+        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b")
         amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
 
         raw_csv = _csv_header()
         parsed = 0
 
-        for ln in text.splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
+        for ln in [l.strip() for l in text.splitlines() if l.strip()]:
             mdate = date_re.search(ln)
+            if not mdate:
+                continue
             amts = amt_re.findall(ln)
-            if not mdate or not amts:
+            if not amts:
                 continue
 
             date = mdate.group(1)
@@ -282,38 +276,37 @@ def analyze_upload(
             raw_csv += _to_csv_row(date, desc, amt)
             parsed += 1
 
-        # If we couldn't parse any rows, return a VALID empty response (200 OK)
         if parsed == 0:
             return _empty_transactions_response(goal=goal, raw_text=text)
 
-        return brain.analyze_transactions(
-            TransactionsRequest(
-                source_type="csv",
-                goal=goal,
-                raw_text=raw_csv,
-            )
-        )
+        payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw_csv)
+        return brain.analyze_transactions(payload)
 
-    # ---- IMAGE (OCR) ----
+    # ---------- IMAGE (OCR) ----------
     if _looks_like_image(filename, content_type):
-        import pytesseract
-        from PIL import Image
+        try:
+            import pytesseract  # type: ignore
+            from PIL import Image  # type: ignore
+        except Exception:
+            raise HTTPException(
+                status_code=415,
+                detail="Image analysis requires pytesseract + Pillow AND system tesseract installed",
+            )
 
-        text = pytesseract.image_to_string(Image.open(path))
+        text = pytesseract.image_to_string(Image.open(str(path))).strip()
 
-        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
+        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b")
         amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
 
         raw_csv = _csv_header()
         parsed = 0
 
-        for ln in text.splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
+        for ln in [l.strip() for l in text.splitlines() if l.strip()]:
             mdate = date_re.search(ln)
+            if not mdate:
+                continue
             amts = amt_re.findall(ln)
-            if not mdate or not amts:
+            if not amts:
                 continue
 
             date = mdate.group(1)
@@ -326,12 +319,7 @@ def analyze_upload(
         if parsed == 0:
             return _empty_transactions_response(goal=goal, raw_text=text)
 
-        return brain.analyze_transactions(
-            TransactionsRequest(
-                source_type="csv",
-                goal=goal,
-                raw_text=raw_csv,
-            )
-        )
+        payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw_csv)
+        return brain.analyze_transactions(payload)
 
     raise HTTPException(status_code=415, detail="Unsupported file type for analysis")

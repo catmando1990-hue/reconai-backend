@@ -6,7 +6,6 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Routers
 from app.routers.files import router as files_router
 from app.routers.exports import router as exports_router
 from app.routers.reconai import router as reconai_router
@@ -19,6 +18,7 @@ from app.routers.plaid import router as plaid_router
 
 
 def get_allowed_origins() -> list[str]:
+    """Allow local dev frontend + optionally override via CORS_ORIGINS env var."""
     env = os.getenv("CORS_ORIGINS", "").strip()
     if env:
         return [o.strip() for o in env.split(",") if o.strip()]
@@ -26,14 +26,14 @@ def get_allowed_origins() -> list[str]:
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        # add deployed frontend later if needed
+        # Add deployed frontend later (Render/Vercel/custom domain)
+        # "https://your-frontend-domain.com",
     ]
 
 
-# ✅ CREATE APP ONCE
 app = FastAPI(title="ReconAI Backend MVP", version="0.1.0")
 
-# ✅ ADD CORS ONCE (AFTER app exists)
+# CORS (fixes browser blocked requests)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
@@ -42,13 +42,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Root + HEAD (fixes Render 405 noise)
+# Root + HEAD (quiet Render healthcheck noise)
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"status": "ok", "service": "reconai-backend"}
 
 
-# ✅ INCLUDE ROUTERS ONCE
+# Routers
 app.include_router(files_router)
 app.include_router(exports_router)
 app.include_router(reconai_router)
