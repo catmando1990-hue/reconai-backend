@@ -203,6 +203,18 @@ def analyze_upload(
     upload_id: str,
     goal: str = Query("business_expenses", description="general_analysis | business_expenses | tax_prep"),
 ):
+    """
+    Analyze an uploaded file server-side.
+
+    Supported:
+    - CSV: direct
+    - XLSX/XLS: converted to CSV text, then analyzed
+    - PDF: best-effort text extraction + heuristic parsing into CSV, then analyzed
+    - Images (png/jpg/jpeg): OCR (if installed) + heuristic parsing into CSV, then analyzed
+
+    If we can't extract any transactions, we return a valid empty response (200 OK),
+    not a 4xx/5xx.
+    """
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             "SELECT filename, content_type, stored_path FROM uploads WHERE id=?",

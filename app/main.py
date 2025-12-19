@@ -18,7 +18,7 @@ from app.routers.plaid import router as plaid_router
 
 
 def get_allowed_origins() -> list[str]:
-    """Allow local dev frontend + optionally override via CORS_ORIGINS env var."""
+    """Allow local dev frontend; override with CORS_ORIGINS if needed."""
     env = os.getenv("CORS_ORIGINS", "").strip()
     if env:
         return [o.strip() for o in env.split(",") if o.strip()]
@@ -26,7 +26,7 @@ def get_allowed_origins() -> list[str]:
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        # Add deployed frontend later (Render/Vercel/custom domain)
+        # Add deployed frontend later if needed
         # "https://your-frontend-domain.com",
     ]
 
