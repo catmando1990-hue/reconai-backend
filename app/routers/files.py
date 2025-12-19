@@ -11,17 +11,13 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, Query
 from fastapi.responses import FileResponse
 
 from app.db import DB_PATH, UPLOADS_DIR
-from app.models import TransactionsRequest, TransactionsResponse, Transaction
+from app.models import TransactionsRequest, TransactionsResponse
 from app.reconai_core.brain import ReconAIBrain
 from app.reconai_core.bank_pdf import extract_text_from_pdf, parse_bank_statement_text
 from app.reconai_core.parser import parse_text_lines
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-
-# ----------------------------
-# helpers
-# ----------------------------
 
 def _safe_name(name: str) -> str:
     name = (name or "").strip()
@@ -54,7 +50,6 @@ def _looks_like_image(filename: str, content_type: Optional[str]) -> bool:
 
 
 def _empty_transactions_response(goal: str, notes: Optional[list[str]] = None) -> TransactionsResponse:
-    """Return a VALID empty TransactionsResponse."""
     return TransactionsResponse(
         total_transactions=0,
         total_outflow=0.0,
@@ -72,13 +67,8 @@ def _empty_transactions_response(goal: str, notes: Optional[list[str]] = None) -
     )
 
 
-# ----------------------------
-# upload + download
-# ----------------------------
-
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Upload ANY file (csv, pdf, images, etc)."""
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -92,7 +82,7 @@ async def upload_file(file: UploadFile = File(...)):
     size = 0
     with stored_path.open("wb") as out:
         while True:
-            chunk = await file.read(1024 * 1024)  # 1MB chunks
+            chunk = await file.read(1024 * 1024)
             if not chunk:
                 break
             out.write(chunk)
@@ -120,7 +110,6 @@ async def upload_file(file: UploadFile = File(...)):
 
 @router.get("/{upload_id}")
 def download_file(upload_id: str):
-    """Download the uploaded file by id."""
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             "SELECT filename, content_type, stored_path FROM uploads WHERE id=?",
@@ -144,14 +133,9 @@ def download_file(upload_id: str):
     )
 
 
-# ----------------------------
-# list uploads (supports /files and /files/)
-# ----------------------------
-
 @router.get("/", include_in_schema=False)
 @router.get("")
 def list_uploads(limit: int = 50):
-    """List recent uploads."""
     limit = max(1, min(limit, 200))
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
@@ -179,26 +163,11 @@ def list_uploads(limit: int = 50):
     ]
 
 
-# ----------------------------
-# analyze (all types)
-# ----------------------------
-
 @router.post("/{upload_id}/analyze", response_model=TransactionsResponse)
 def analyze_upload(
     upload_id: str,
     goal: str = Query("business_expenses", description="general_analysis | business_expenses | tax_prep"),
 ):
-    """
-    Analyze an uploaded file server-side.
-
-    Supported:
-    - CSV: direct
-    - XLSX/XLS: converted to CSV text, then analyzed
-    - PDF: bank-aware extraction -> structured transactions -> analyzed
-    - Images (png/jpg/jpeg): OCR (if installed) -> text parse -> analyzed
-
-    If we can't extract any transactions, we return a valid empty response (200 OK).
-    """
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             "SELECT filename, content_type, stored_path FROM uploads WHERE id=?",
@@ -211,52 +180,39 @@ def analyze_upload(
 
     filename, content_type, stored_path = row
     path = Path(stored_path)
-
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file missing on disk")
 
     brain = ReconAIBrain()
 
-    # ---------- CSV ----------
     if _looks_like_csv(filename, content_type):
         raw = path.read_text(encoding="utf-8-sig", errors="replace")
         payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw)
         return brain.analyze_transactions(payload)
 
-    # ---------- EXCEL ----------
     if _looks_like_excel(filename, content_type):
         try:
             import pandas as pd  # type: ignore
         except Exception:
             raise HTTPException(status_code=415, detail="Excel analysis requires pandas + openpyxl installed")
-
         df = pd.read_excel(path)
         raw_csv = df.to_csv(index=False)
         payload = TransactionsRequest(source_type="csv", goal=goal, raw_text=raw_csv)
         return brain.analyze_transactions(payload)
 
-    # ---------- PDF (bank-aware) ----------
     if _looks_like_pdf(filename, content_type):
         text, pdf_notes = extract_text_from_pdf(str(path), max_pages=12)
+
         if not text:
-            # likely scanned / image-based statement (OCR for PDF pages is a separate step)
             return _empty_transactions_response(goal, notes=pdf_notes)
 
         bank_res = parse_bank_statement_text(text)
-
-        # If we got structured transactions, analyze them directly
         if bank_res.transactions:
-            payload = TransactionsRequest(
-                source_type="structured",
-                goal=goal,
-                transactions=bank_res.transactions,
-            )
+            payload = TransactionsRequest(source_type="structured", goal=goal, transactions=bank_res.transactions)
             resp = brain.analyze_transactions(payload)
-            # prepend bank notes to summary_notes
             resp.summary_notes = bank_res.notes + resp.summary_notes
             return resp
 
-        # Fallback: try generic text-line parsing
         generic = parse_text_lines(text)
         if generic.transactions:
             payload = TransactionsRequest(source_type="structured", goal=goal, transactions=generic.transactions)
@@ -266,7 +222,6 @@ def analyze_upload(
 
         return _empty_transactions_response(goal, notes=(pdf_notes + bank_res.notes))
 
-    # ---------- IMAGE (OCR -> parse) ----------
     if _looks_like_image(filename, content_type):
         try:
             import pytesseract  # type: ignore
@@ -276,13 +231,10 @@ def analyze_upload(
                 status_code=415,
                 detail="Image analysis requires pytesseract + Pillow AND system tesseract installed",
             )
-
         text = pytesseract.image_to_string(Image.open(str(path))).strip()
         parsed = parse_text_lines(text)
-
         if not parsed.transactions:
             return _empty_transactions_response(goal, notes=parsed.notes)
-
         payload = TransactionsRequest(source_type="structured", goal=goal, transactions=parsed.transactions)
         resp = brain.analyze_transactions(payload)
         resp.summary_notes = parsed.notes + resp.summary_notes

@@ -1,186 +1,129 @@
 # app/reconai_core/parser.py
 from __future__ import annotations
 
-import csv
-import datetime as dt
-import io
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from datetime import date, datetime
+from typing import List, Optional
 
 from app.models import Transaction
 
-
-# -----------------------------
-# Parsed wrapper
-# -----------------------------
+# Generic helpers used as fallbacks when bank-specific parsing doesn't work.
 
 @dataclass
-class ParsedInput:
+class TextParseResult:
     transactions: List[Transaction]
     notes: List[str]
-    source_text: Optional[str] = None
 
 
-def _parse_date(s: str) -> Optional[dt.date]:
+_MMDD_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-]?(\d{2,4})?\b")
+_MONTHS = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+_MONTH_HEADER_RE = re.compile(rf"\b({'|'.join(_MONTHS)})\s+(\d{{1,2}}),\s*(\d{{4}})\b")
+
+_AMOUNT_RE = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
+
+
+def _clean(s: str) -> str:
     s = (s or "").strip()
-    if not s:
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _parse_date_mmdd(line: str, default_year: Optional[int] = None) -> Optional[date]:
+    m = _MMDD_RE.search(line or "")
+    if not m:
         return None
-
-    # Common formats: MM/DD/YYYY, MM/DD/YY, YYYY-MM-DD
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y"):
-        try:
-            return dt.datetime.strptime(s, fmt).date()
-        except Exception:
-            continue
-    return None
-
-
-def _parse_amount(s: str) -> Optional[float]:
-    if s is None:
-        return None
-    raw = str(s).strip()
-    if not raw:
-        return None
-
-    # (123.45) -> -123.45
-    neg = False
-    if raw.startswith("(") and raw.endswith(")"):
-        neg = True
-        raw = raw[1:-1]
-
-    raw = raw.replace("$", "").replace(",", "").strip()
-
-    # some statements use trailing CR to indicate credit
-    if raw.lower().endswith("cr"):
-        raw = raw[:-2].strip()
-
+    mm, dd, yy = m.group(1), m.group(2), m.group(3)
     try:
-        val = float(raw)
-        return -val if neg else val
+        month = int(mm)
+        day = int(dd)
+        if yy:
+            y = int(yy)
+            if y < 100:
+                y += 2000
+        else:
+            y = default_year or datetime.utcnow().year
+        return date(y, month, day)
     except Exception:
         return None
 
 
-def _merchant_guess(desc: str) -> str:
-    # Basic merchant guess: first token chunk
-    desc = (desc or "").strip()
-    if not desc:
-        return ""
-    # Remove card numbers / ref
-    desc = re.sub(r"\b\d{4,}\b", "", desc).strip()
-    return desc.split("  ")[0].split("  ")[0].split(" ")[0:4] and " ".join(desc.split()[:3]) or desc
-
-
-# -----------------------------
-# Structured
-# -----------------------------
-
-def parse_structured_transactions(items: Sequence[Transaction]) -> ParsedInput:
-    return ParsedInput(transactions=list(items), notes=["Parsed structured transactions."], source_text=None)
-
-
-# -----------------------------
-# CSV
-# -----------------------------
-
-def parse_csv_text(raw_csv: str) -> ParsedInput:
-    raw_csv = raw_csv or ""
-    f = io.StringIO(raw_csv)
-    reader = csv.DictReader(f)
-
-    txs: List[Transaction] = []
-    notes: List[str] = ["Parsed CSV input."]
-
-    if not reader.fieldnames:
-        return ParsedInput([], ["CSV had no header/fields."], source_text=raw_csv)
-
-    # Flexible column mapping
-    def get(row, *keys):
-        for k in keys:
-            if k in row and row[k] is not None:
-                return row[k]
+def _parse_date_month_header(line: str) -> Optional[date]:
+    m = _MONTH_HEADER_RE.search(line or "")
+    if not m:
+        return None
+    try:
+        return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y").date()
+    except Exception:
         return None
 
-    for row in reader:
-        date_s = get(row, "date", "Date", "Posting Date", "Posted Date", "Trans Date", "Transaction Date")
-        desc = get(row, "description", "Description", "Merchant", "Payee", "Name") or ""
-        amt_s = get(row, "amount", "Amount", "Debit", "Credit", "Transaction Amount")
 
-        # Handle split debit/credit columns
-        debit = get(row, "Debit", "debit")
-        credit = get(row, "Credit", "credit")
-        amt = _parse_amount(amt_s) if amt_s is not None else None
-
-        if amt is None:
-            d = _parse_amount(debit)
-            c = _parse_amount(credit)
-            if d is not None and d != 0:
-                amt = -abs(d)
-            elif c is not None and c != 0:
-                amt = abs(c)
-
-        if amt is None:
-            continue
-
-        txs.append(
-            Transaction(
-                date=_parse_date(str(date_s)) if date_s else None,
-                amount=float(amt),
-                description=str(desc),
-                merchant=_merchant_guess(str(desc)),
-            )
-        )
-
-    if not txs:
-        notes.append("No valid transactions were found in CSV.")
-
-    return ParsedInput(txs, notes, source_text=raw_csv)
-
-
-# -----------------------------
-# Semi-structured text
-# -----------------------------
-
-_DATE_RE = re.compile(r"\b(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b")
-_AMT_RE = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
-
-
-def parse_text_lines(raw_text: str) -> ParsedInput:
-    raw_text = (raw_text or "").strip()
-    if not raw_text:
-        return ParsedInput([], ["Empty text input."], source_text="")
-
-    lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+def parse_text_lines(text: str) -> TextParseResult:
+    """
+    Generic text parser:
+    - Supports mm/dd/yy style dates, OR 'December 17, 2025' headers.
+    - Extracts any line containing (date + amount) or uses date headers to tag subsequent amount lines.
+    """
+    lines = [_clean(l) for l in (text or "").splitlines() if _clean(l)]
+    notes: List[str] = []
     txs: List[Transaction] = []
-    notes: List[str] = ["Parsed semi-structured text input."]
 
-    # Greedy line-based parsing
-    for ln in lines:
-        mdate = _DATE_RE.search(ln)
-        if not mdate:
+    current_date: Optional[date] = None
+    for idx, ln in enumerate(lines):
+        # update date header context
+        dh = _parse_date_month_header(ln)
+        if dh:
+            current_date = dh
             continue
-        amts = _AMT_RE.findall(ln)
+        md = _parse_date_mmdd(ln)
+        if md:
+            current_date = md  # sometimes transactions include mm/dd without year
+            # keep scanning the same line for amount too
+
+        amts = _AMOUNT_RE.findall(ln)
         if not amts:
             continue
 
-        date_s = mdate.group(1)
-        amt_s = amts[-1]
-        desc = ln.replace(date_s, "").replace(amt_s, "").strip()
-        amt = _parse_amount(amt_s)
-        if amt is None:
+        # Try to decide if this looks like a transaction line.
+        # We require either:
+        # - line has a date + an amount, or
+        # - we have a current_date header and this line is mostly an amount (or amount + short text)
+        has_date_inline = _MMDD_RE.search(ln) is not None
+        if not has_date_inline and current_date is None:
             continue
+
+        amt_raw = amts[-1]
+        amt = float(amt_raw.replace(",", "").replace("$", "").replace(" ", ""))
+        desc = ln
+
+        # If the line is only an amount, look back for description
+        if _clean(desc).replace("$", "").replace(",", "").replace("-", "").replace("+", "").replace(".", "").isdigit():
+            # look back up to 3 lines for a description
+            for back in range(1, 4):
+                if idx - back < 0:
+                    break
+                cand = lines[idx - back]
+                if cand and _AMOUNT_RE.fullmatch(cand) is None:
+                    desc = cand
+                    break
 
         txs.append(
             Transaction(
-                date=_parse_date(date_s),
-                amount=float(amt),
-                description=desc or ln,
-                merchant=_merchant_guess(desc or ln),
+                date=current_date,
+                amount=amt,
+                description=desc,
+                merchant=None,
+                classification=None,
+                reason=None,
             )
         )
 
     if not txs:
-        notes.append("No valid transactions were found in text.")
+        notes.append("Generic text parser could not confidently extract transactions from this input.")
+    else:
+        notes.append(f"Generic text parser extracted {len(txs)} candidate transactions.")
 
-    return ParsedInput(txs, notes, source_text=raw_text)
+    return TextParseResult(transactions=txs, notes=notes)
