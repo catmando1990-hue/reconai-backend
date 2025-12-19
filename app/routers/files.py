@@ -1,9 +1,7 @@
-# app/routers/files.py
-
 from __future__ import annotations
 
-import sqlite3 
 import re
+import sqlite3
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -28,6 +26,7 @@ def _looks_like_csv(filename: str, content_type: Optional[str]) -> bool:
     fn = (filename or "").lower()
     ct = (content_type or "").lower()
     return fn.endswith(".csv") or ("csv" in ct)
+
 
 def _looks_like_excel(filename: str, content_type: Optional[str]) -> bool:
     fn = (filename or "").lower()
@@ -160,784 +159,174 @@ def list_uploads(limit: int = 50):
     ]
 
 
-[{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"router\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 1,
-	"startColumn": 2,
-	"endLineNumber": 1,
-	"endColumn": 8,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"TransactionsResponse\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 1,
-	"startColumn": 53,
-	"endLineNumber": 1,
-	"endColumn": 73,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"Query\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 4,
-	"startColumn": 17,
-	"endLineNumber": 4,
-	"endColumn": 22,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"sqlite3\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 15,
-	"startColumn": 10,
-	"endLineNumber": 15,
-	"endColumn": 17,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"DB_PATH\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 15,
-	"startColumn": 26,
-	"endLineNumber": 15,
-	"endColumn": 33,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 23,
-	"startColumn": 15,
-	"endLineNumber": 23,
-	"endColumn": 28,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"Path\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 26,
-	"startColumn": 12,
-	"endLineNumber": 26,
-	"endColumn": 16,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 29,
-	"startColumn": 15,
-	"endLineNumber": 29,
-	"endColumn": 28,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_looks_like_csv\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 32,
-	"startColumn": 8,
-	"endLineNumber": 32,
-	"endColumn": 23,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 36,
-	"startColumn": 19,
-	"endLineNumber": 36,
-	"endColumn": 32,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"TransactionsRequest\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 38,
-	"startColumn": 19,
-	"endLineNumber": 38,
-	"endColumn": 38,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"ReconAIBrain\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 43,
-	"startColumn": 17,
-	"endLineNumber": 43,
-	"endColumn": 29,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_looks_like_excel\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 47,
-	"startColumn": 8,
-	"endLineNumber": 47,
-	"endColumn": 25,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 51,
-	"startColumn": 19,
-	"endLineNumber": 51,
-	"endColumn": 32,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 60,
-	"startColumn": 19,
-	"endLineNumber": 60,
-	"endColumn": 32,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"TransactionsRequest\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 62,
-	"startColumn": 19,
-	"endLineNumber": 62,
-	"endColumn": 38,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"ReconAIBrain\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 67,
-	"startColumn": 17,
-	"endLineNumber": 67,
-	"endColumn": 29,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_looks_like_pdf\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 71,
-	"startColumn": 8,
-	"endLineNumber": 71,
-	"endColumn": 23,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 75,
-	"startColumn": 19,
-	"endLineNumber": 75,
-	"endColumn": 32,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 90,
-	"startColumn": 19,
-	"endLineNumber": 90,
-	"endColumn": 32,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"re\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 92,
-	"startColumn": 19,
-	"endLineNumber": 92,
-	"endColumn": 21,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"re\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 93,
-	"startColumn": 18,
-	"endLineNumber": 93,
-	"endColumn": 20,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_csv_header\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 95,
-	"startColumn": 19,
-	"endLineNumber": 95,
-	"endColumn": 30,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_to_csv_row\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 110,
-	"startColumn": 24,
-	"endLineNumber": 110,
-	"endColumn": 35,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_csv_header\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 115,
-	"startColumn": 23,
-	"endLineNumber": 115,
-	"endColumn": 34,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"TransactionsRequest\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 117,
-	"startColumn": 19,
-	"endLineNumber": 117,
-	"endColumn": 38,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"ReconAIBrain\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 122,
-	"startColumn": 17,
-	"endLineNumber": 122,
-	"endColumn": 29,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_looks_like_image\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 126,
-	"startColumn": 8,
-	"endLineNumber": 126,
-	"endColumn": 25,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 131,
-	"startColumn": 19,
-	"endLineNumber": 131,
-	"endColumn": 32,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 140,
-	"startColumn": 19,
-	"endLineNumber": 140,
-	"endColumn": 32,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"re\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 142,
-	"startColumn": 19,
-	"endLineNumber": 142,
-	"endColumn": 21,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"re\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 143,
-	"startColumn": 18,
-	"endLineNumber": 143,
-	"endColumn": 20,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_csv_header\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 145,
-	"startColumn": 19,
-	"endLineNumber": 145,
-	"endColumn": 30,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_to_csv_row\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 160,
-	"startColumn": 24,
-	"endLineNumber": 160,
-	"endColumn": 35,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"_csv_header\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 164,
-	"startColumn": 23,
-	"endLineNumber": 164,
-	"endColumn": 34,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"TransactionsRequest\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 166,
-	"startColumn": 19,
-	"endLineNumber": 166,
-	"endColumn": 38,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"ReconAIBrain\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 171,
-	"startColumn": 17,
-	"endLineNumber": 171,
-	"endColumn": 29,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/app/routers/files.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportUndefinedVariable",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportUndefinedVariable.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "\"HTTPException\" is not defined",
-	"source": "Pylance",
-	"startLineNumber": 174,
-	"startColumn": 11,
-	"endLineNumber": 174,
-	"endColumn": 24,
-	"origin": "extHost1"
-},{
-	"resource": "/c:/Users/HP/Desktop/reconai-backend/tests/test_exports_csv.py",
-	"owner": "Pylance2",
-	"code": {
-		"value": "reportMissingImports",
-		"target": {
-			"$mid": 1,
-			"path": "/microsoft/pylance-release/blob/main/docs/diagnostics/reportMissingImports.md",
-			"scheme": "https",
-			"authority": "github.com"
-		}
-	},
-	"severity": 4,
-	"message": "Import \"pytest\" could not be resolved",
-	"source": "Pylance",
-	"startLineNumber": 9,
-	"startColumn": 8,
-	"endLineNumber": 9,
-	"endColumn": 14,
-	"origin": "extHost1"
-}]
+@router.post("/{upload_id}/analyze", response_model=TransactionsResponse)
+def analyze_upload(
+    upload_id: str,
+    goal: str = Query("business_expenses", description="general_analysis | business_expenses | tax_prep"),
+):
+    """
+    Analyze an uploaded file server-side.
+
+    Supported:
+    - CSV: direct (current behavior)
+    - XLSX/XLS: converted to CSV text, then analyzed
+    - PDF: best-effort text extraction + heuristic parsing into CSV, then analyzed
+    - Images (png/jpg/jpeg): OCR (if installed) + heuristic parsing into CSV, then analyzed
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "SELECT filename, content_type, stored_path FROM uploads WHERE id=?",
+            (upload_id,),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Upload not found")
+
+    filename, content_type, stored_path = row
+    path = Path(stored_path)
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Stored file missing on disk")
+
+    brain = ReconAIBrain()
+
+    # ---------- CSV (existing) ----------
+    if _looks_like_csv(filename, content_type):
+        try:
+            raw = path.read_text(encoding="utf-8-sig", errors="replace")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+
+        payload = TransactionsRequest(
+            source_type="csv",
+            goal=goal,
+            raw_text=raw,
+        )
+        return brain.analyze_transactions(payload)
+
+    # ---------- EXCEL (.xlsx/.xls) -> CSV ----------
+    if _looks_like_excel(filename, content_type):
+        try:
+            import pandas as pd  # type: ignore
+        except Exception:
+            raise HTTPException(
+                status_code=415,
+                detail="Excel analysis requires pandas + openpyxl installed on the backend",
+            )
+
+        try:
+            df = pd.read_excel(path)
+            raw_csv = df.to_csv(index=False)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to parse Excel: {e}")
+
+        payload = TransactionsRequest(
+            source_type="csv",
+            goal=goal,
+            raw_text=raw_csv,
+        )
+        return brain.analyze_transactions(payload)
+
+    # ---------- PDF -> text -> heuristic tx lines -> CSV ----------
+    if _looks_like_pdf(filename, content_type):
+        try:
+            from pypdf import PdfReader  # type: ignore
+        except Exception:
+            raise HTTPException(
+                status_code=415,
+                detail="PDF analysis requires pypdf installed on the backend",
+            )
+
+        try:
+            reader = PdfReader(str(path))
+            text_parts = []
+            for page in reader.pages[:8]:
+                try:
+                    text_parts.append(page.extract_text() or "")
+                except Exception:
+                    continue
+            text = "\n".join(text_parts)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to read PDF: {e}")
+
+        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
+        amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
+
+        raw_csv = _csv_header()
+        parsed = 0
+
+        for ln in [l.strip() for l in text.splitlines() if l.strip()]:
+            mdate = date_re.search(ln)
+            if not mdate:
+                continue
+            amts = amt_re.findall(ln)
+            if not amts:
+                continue
+
+            date = mdate.group(1)
+            amt = amts[-1]
+            desc = ln.replace(date, "").replace(amt, "").strip() or "PDF transaction"
+
+            raw_csv += _to_csv_row(date, desc, amt)
+            parsed += 1
+
+        if parsed == 0:
+            raw_csv = _csv_header()
+
+        payload = TransactionsRequest(
+            source_type="csv",
+            goal=goal,
+            raw_text=raw_csv,
+        )
+        return brain.analyze_transactions(payload)
+
+    # ---------- IMAGE -> OCR -> heuristic tx lines -> CSV ----------
+    if _looks_like_image(filename, content_type):
+        try:
+            import pytesseract  # type: ignore
+            from PIL import Image  # type: ignore
+        except Exception:
+            raise HTTPException(
+                status_code=415,
+                detail="Image analysis requires pytesseract + Pillow AND system tesseract installed on the backend",
+            )
+
+        try:
+            img = Image.open(str(path))
+            text = pytesseract.image_to_string(img)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed OCR: {e}")
+
+        date_re = re.compile(r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b")
+        amt_re = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
+
+        raw_csv = _csv_header()
+        parsed = 0
+
+        for ln in [l.strip() for l in text.splitlines() if l.strip()]:
+            mdate = date_re.search(ln)
+            if not mdate:
+                continue
+            amts = amt_re.findall(ln)
+            if not amts:
+                continue
+
+            date = mdate.group(1)
+            amt = amts[-1]
+            desc = ln.replace(date, "").replace(amt, "").strip() or "OCR transaction"
+
+            raw_csv += _to_csv_row(date, desc, amt)
+            parsed += 1
+
+        if parsed == 0:
+            raw_csv = _csv_header()
+
+        payload = TransactionsRequest(
+            source_type="csv",
+            goal=goal,
+            raw_text=raw_csv,
+        )
+        return brain.analyze_transactions(payload)
+
+    raise HTTPException(status_code=415, detail="Unsupported file type for analysis")
