@@ -3,6 +3,11 @@ from __future__ import annotations
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.routers import merchant
+from app.routers import lender
+from app.routers import compliance
+from app.routers import entity
+from app.routers import veteran
 
 # Import all routers
 from app.routers.files import router as files_router
@@ -78,6 +83,11 @@ app.include_router(credit_router)
 app.include_router(feedback_router)
 app.include_router(plaid_router)
 app.include_router(claude.router)
+app.include_router(merchant.router)
+app.include_router(lender.router)
+app.include_router(compliance.router)
+app.include_router(entity.router)
+app.include_router(veteran.router)
 
 # Startup event
 @app.on_event("startup")
