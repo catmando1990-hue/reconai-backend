@@ -1,242 +1,476 @@
-# app/reconai_core/parser.py
-from __future__ import annotations
+# app/reconai_core/bank_parsers.py
+"""
+ReconAI Bank-Specific Parsers
+Specialized parsing logic for major US banks
+"""
 
 import re
-from dataclasses import dataclass
 from datetime import date, datetime
-from typing import List, Optional
-
+from typing import List, Optional, Tuple
 from app.models import Transaction
-
-# Generic helpers used as fallbacks when bank-specific parsing doesn't work.
-
-@dataclass
-class TextParseResult:
-    transactions: List[Transaction]
-    notes: List[str]
+from app.reconai_core.parser import _parse_amount, _merchant_guess
+from app.reconai_core.bank_intelligence import BankProfile
 
 
-@dataclass
-class ParsedInput:
-    transactions: List[Transaction]
-    notes: List[str]
-    source_text: Optional[str] = None
+# ============================================================================
+# CHASE BANK PARSERS
+# ============================================================================
 
-
-_MMDD_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-]?(\d{2,4})?\b")
-_MONTHS = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
-_MONTH_HEADER_RE = re.compile(rf"\b({'|'.join(_MONTHS)})\s+(\d{{1,2}}),\s*(\d{{4}})\b")
-
-_AMOUNT_RE = re.compile(r"[-+]?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})|[-+]?\$?\d+(?:\.\d{2})")
-
-
-def _clean(s: str) -> str:
-    s = (s or "").strip()
-    s = re.sub(r"\s+", " ", s)
-    return s
-
-
-def _parse_date_mmdd(line: str, default_year: Optional[int] = None) -> Optional[date]:
-    m = _MMDD_RE.search(line or "")
-    if not m:
-        return None
-    mm, dd, yy = m.group(1), m.group(2), m.group(3)
-    try:
-        month = int(mm)
-        day = int(dd)
-        if yy:
-            y = int(yy)
-            if y < 100:
-                y += 2000
-        else:
-            y = default_year or datetime.utcnow().year
-        return date(y, month, day)
-    except Exception:
-        return None
-
-
-def _parse_date_month_header(line: str) -> Optional[date]:
-    m = _MONTH_HEADER_RE.search(line or "")
-    if not m:
-        return None
-    try:
-        return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y").date()
-    except Exception:
-        return None
-
-
-def _parse_amount(text: str) -> Optional[float]:
-    """Extract amount from text"""
-    m = _AMOUNT_RE.search(text or "")
-    if not m:
-        return None
-    try:
-        return float(m.group(0).replace(",", "").replace("$", "").strip())
-    except:
-        return None
-
-
-def _parse_date(text: str) -> Optional[date]:
-    """Parse date from text"""
-    # Try mm/dd format first
-    dt = _parse_date_mmdd(text)
-    if dt:
-        return dt
-    # Try month header format
-    return _parse_date_month_header(text)
-
-
-def _merchant_guess(description: str) -> Optional[str]:
-    """Extract merchant name from description"""
-    desc = _clean(description)
-    # Simple heuristic: take first few words before common payment keywords
-    keywords = ['payment', 'purchase', 'debit', 'credit', 'transfer', 'withdrawal']
-    for kw in keywords:
-        if kw in desc.lower():
-            desc = desc.lower().split(kw)[0].strip()
-            break
+def parse_chase_statement(text: str, profile: BankProfile) -> Tuple[List[Transaction], List[str]]:
+    """
+    Parse Chase bank statements.
     
-    # Return first 3 words as merchant name
-    words = desc.split()
-    if words:
-        return ' '.join(words[:min(3, len(words))]).title()
-    return None
-
-
-def parse_text_lines(text: str) -> TextParseResult:
+    Chase format typically:
+    Date        Description                     Amount      Balance
+    12/15/2025  WALMART #1234                  -52.18      1,234.56
+    12/14/2025  DEPOSIT                        500.00      1,286.74
     """
-    Generic text parser:
-    - Supports mm/dd/yy style dates, OR 'December 17, 2025' headers.
-    - Extracts any line containing (date + amount) or uses date headers to tag subsequent amount lines.
-    """
-    lines = [_clean(l) for l in (text or "").splitlines() if _clean(l)]
-    notes: List[str] = []
+    notes = [f"Using Chase-specific parser"]
     txs: List[Transaction] = []
-
-    current_date: Optional[date] = None
-    for idx, ln in enumerate(lines):
-        # update date header context
-        dh = _parse_date_month_header(ln)
-        if dh:
-            current_date = dh
-            continue
-        md = _parse_date_mmdd(ln)
-        if md:
-            current_date = md  # sometimes transactions include mm/dd without year
-            # keep scanning the same line for amount too
-
-        amts = _AMOUNT_RE.findall(ln)
-        if not amts:
-            continue
-
-        # Try to decide if this looks like a transaction line.
-        # We require either:
-        # - line has a date + an amount, or
-        # - we have a current_date header and this line is mostly an amount (or amount + short text)
-        has_date_inline = _MMDD_RE.search(ln) is not None
-        if not has_date_inline and current_date is None:
-            continue
-
-        amt_raw = amts[-1]
-        amt = float(amt_raw.replace(",", "").replace("$", "").replace(" ", ""))
-        desc = ln
-
-        # If the line is only an amount, look back for description
-        if _clean(desc).replace("$", "").replace(",", "").replace("-", "").replace("+", "").replace(".", "").isdigit():
-            # look back up to 3 lines for a description
-            for back in range(1, 4):
-                if idx - back < 0:
-                    break
-                cand = lines[idx - back]
-                if cand and _AMOUNT_RE.fullmatch(cand) is None:
-                    desc = cand
-                    break
-
-        txs.append(
-            Transaction(
-                date=current_date,
-                amount=amt,
-                description=desc,
-                merchant=None,
-                classification=None,
-                reason=None,
-            )
-        )
-
-    if not txs:
-        notes.append("Generic text parser could not confidently extract transactions from this input.")
-    else:
-        notes.append(f"Generic text parser extracted {len(txs)} candidate transactions.")
-
-    return TextParseResult(transactions=txs, notes=notes)
-
-
-def parse_structured_transactions(transactions: List[Transaction]) -> ParsedInput:
-    """
-    When transactions are already structured (from API, etc)
-    """
-    return ParsedInput(
-        transactions=transactions,
-        notes=["Using pre-structured transaction data."],
-        source_text=None
-    )
-
-
-def parse_csv_text(csv_text: str) -> ParsedInput:
-    """
-    Parse CSV format text
-    """
-    import csv
-    from io import StringIO
     
-    lines = [_clean(l) for l in csv_text.splitlines() if _clean(l)]
-    if not lines:
-        return ParsedInput(
-            transactions=[],
-            notes=["No CSV data found."],
-            source_text=csv_text
-        )
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
     
-    reader = csv.DictReader(StringIO(csv_text))
-    txs = []
+    # Chase date pattern: MM/DD/YYYY or MM/DD/YY
+    date_pattern = re.compile(r'^(\d{1,2}/\d{1,2}/\d{2,4})\s+(.+?)(?:\s+(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})))\s*(?:\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))?$')
     
-    for row in reader:
-        # Try to parse date from common column names
-        dt = None
-        for col in ['date', 'Date', 'DATE', 'transaction_date', 'Transaction Date']:
-            if col in row and row[col]:
-                dt = _parse_date_mmdd(row[col])
-                if dt:
-                    break
-        
-        # Try to parse amount
-        amt = 0.0
-        for col in ['amount', 'Amount', 'AMOUNT']:
-            if col in row and row[col]:
-                try:
-                    amt = float(row[col].replace(',', '').replace('$', ''))
-                    break
-                except:
-                    pass
-        
-        # Get description
-        desc = row.get('description') or row.get('Description') or row.get('DESCRIPTION') or ''
-        
-        if dt or amt:
+    for line in lines:
+        match = date_pattern.match(line)
+        if match:
+            date_str, description, amount_str = match.groups()
+            
+            # Parse date
+            try:
+                if len(date_str.split('/')[-1]) == 2:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
+                else:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except:
+                continue
+            
+            # Parse amount
+            amount = _parse_amount(amount_str)
+            if amount is None:
+                continue
+            
+            merchant = _merchant_guess(description)
+            
             txs.append(Transaction(
-                date=dt,
-                amount=amt,
-                description=desc,
-                merchant=None,
+                date=tx_date,
+                amount=float(amount),
+                description=description.strip(),
+                merchant=merchant,
                 classification=None,
                 reason=None
             ))
     
-    return ParsedInput(
-        transactions=txs,
-        notes=[f"Parsed {len(txs)} transactions from CSV."],
-        source_text=csv_text
+    if txs:
+        notes.append(f"Extracted {len(txs)} transactions from Chase statement")
+    else:
+        notes.append("No transactions matched Chase format. May need format adjustment.")
+    
+    return txs, notes
+
+
+# ============================================================================
+# BANK OF AMERICA PARSERS
+# ============================================================================
+
+def parse_bofa_statement(text: str, profile: BankProfile) -> Tuple[List[Transaction], List[str]]:
+    """
+    Parse Bank of America statements.
+    
+    BofA format typically:
+    Date        Description                     Amount      Running Bal.
+    12/15       STARBUCKS #12345               -5.47       1,234.56
+    12/14       Online Transfer                 500.00     1,740.03
+    """
+    notes = [f"Using Bank of America-specific parser"]
+    txs: List[Transaction] = []
+    
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    
+    # BofA often uses MM/DD format (year inferred from statement period)
+    date_pattern = re.compile(r'^(\d{1,2}/\d{1,2}(?:/\d{2,4})?)\s+(.+?)(?:\s+(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})))\s*(?:\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))?$')
+    
+    # Try to find statement period year from header
+    current_year = datetime.now().year
+    year_match = re.search(r'Statement Period.*?(\d{4})', text, re.IGNORECASE)
+    if year_match:
+        current_year = int(year_match.group(1))
+    
+    for line in lines:
+        match = date_pattern.match(line)
+        if match:
+            date_str, description, amount_str = match.groups()
+            
+            # Parse date
+            try:
+                if '/' in date_str and len(date_str.split('/')) == 2:
+                    # Add year
+                    tx_date = datetime.strptime(f"{date_str}/{current_year}", "%m/%d/%Y").date()
+                elif len(date_str.split('/')[-1]) == 2:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
+                else:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except:
+                continue
+            
+            amount = _parse_amount(amount_str)
+            if amount is None:
+                continue
+            
+            merchant = _merchant_guess(description)
+            
+            txs.append(Transaction(
+                date=tx_date,
+                amount=float(amount),
+                description=description.strip(),
+                merchant=merchant,
+                classification=None,
+                reason=None
+            ))
+    
+    if txs:
+        notes.append(f"Extracted {len(txs)} transactions from Bank of America statement")
+    else:
+        notes.append("No transactions matched BofA format. May need format adjustment.")
+    
+    return txs, notes
+
+
+# ============================================================================
+# WELLS FARGO PARSERS
+# ============================================================================
+
+def parse_wells_fargo_statement(text: str, profile: BankProfile) -> Tuple[List[Transaction], List[str]]:
+    """
+    Parse Wells Fargo statements.
+    
+    Wells Fargo format typically:
+    Date        Check No.   Description             Withdrawals     Deposits    Balance
+    12/15/25                AMAZON.COM              52.18                       1,234.56
+    12/14/25                PAYCHECK                            2,000.00        1,786.74
+    """
+    notes = [f"Using Wells Fargo-specific parser"]
+    txs: List[Transaction] = []
+    
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    
+    # Wells Fargo can use various date formats
+    # Pattern matches: date, optional check number, description, and amount columns
+    date_pattern = re.compile(
+        r'^(\d{1,2}/\d{1,2}/\d{2,4})\s+(?:\d+\s+)?(.+?)\s+(?:(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))\s+)?(?:(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))\s+)?(?:\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))?$'
     )
+    
+    for line in lines:
+        match = date_pattern.match(line)
+        if match:
+            date_str, description, withdrawal, deposit = match.groups()
+            
+            # Parse date
+            try:
+                if len(date_str.split('/')[-1]) == 2:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
+                else:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except:
+                continue
+            
+            # Amount is either withdrawal (negative) or deposit (positive)
+            amount_str = withdrawal or deposit
+            if not amount_str:
+                continue
+            
+            amount = _parse_amount(amount_str)
+            if amount is None:
+                continue
+            
+            # If it was in withdrawal column, make it negative
+            if withdrawal and amount > 0:
+                amount = -amount
+            
+            merchant = _merchant_guess(description)
+            
+            txs.append(Transaction(
+                date=tx_date,
+                amount=float(amount),
+                description=description.strip(),
+                merchant=merchant,
+                classification=None,
+                reason=None
+            ))
+    
+    if txs:
+        notes.append(f"Extracted {len(txs)} transactions from Wells Fargo statement")
+    else:
+        notes.append("No transactions matched Wells Fargo format. May need format adjustment.")
+    
+    return txs, notes
+
+
+# ============================================================================
+# CAPITAL ONE PARSERS
+# ============================================================================
+
+def parse_capital_one_statement(text: str, profile: BankProfile) -> Tuple[List[Transaction], List[str]]:
+    """
+    Parse Capital One statements (both banking and credit card).
+    
+    Capital One format typically:
+    Transaction Date    Posted Date     Description                 Debit       Credit
+    2025-12-15         2025-12-16      WHOLE FOODS #123            52.18
+    2025-12-14         2025-12-15      PAYMENT - THANK YOU                     500.00
+    """
+    notes = [f"Using Capital One-specific parser"]
+    txs: List[Transaction] = []
+    
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    
+    # Capital One often uses YYYY-MM-DD format
+    date_pattern = re.compile(
+        r'^(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4})\s+(?:\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}\s+)?(.+?)\s+(?:(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))\s+)?(?:(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})))?$'
+    )
+    
+    for line in lines:
+        match = date_pattern.match(line)
+        if match:
+            date_str, description, debit, credit = match.groups()
+            
+            # Parse date
+            try:
+                if '-' in date_str:
+                    tx_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                elif len(date_str.split('/')[-1]) == 2:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
+                else:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except:
+                continue
+            
+            # Amount is either debit (negative) or credit (positive)
+            amount_str = debit or credit
+            if not amount_str:
+                continue
+            
+            amount = _parse_amount(amount_str)
+            if amount is None:
+                continue
+            
+            # If it was a debit, make it negative
+            if debit and amount > 0:
+                amount = -amount
+            
+            merchant = _merchant_guess(description)
+            
+            txs.append(Transaction(
+                date=tx_date,
+                amount=float(amount),
+                description=description.strip(),
+                merchant=merchant,
+                classification=None,
+                reason=None
+            ))
+    
+    if txs:
+        notes.append(f"Extracted {len(txs)} transactions from Capital One statement")
+    else:
+        notes.append("No transactions matched Capital One format. May need format adjustment.")
+    
+    return txs, notes
+
+
+# ============================================================================
+# USAA PARSERS
+# ============================================================================
+
+def parse_usaa_statement(text: str, profile: BankProfile) -> Tuple[List[Transaction], List[str]]:
+    """
+    Parse USAA statements.
+    
+    USAA format typically similar to other banks:
+    Date        Description                     Amount      Balance
+    12/15/2025  COSTCO WHSE #1234              -125.43     2,345.67
+    """
+    notes = [f"Using USAA-specific parser"]
+    txs: List[Transaction] = []
+    
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    
+    date_pattern = re.compile(r'^(\d{1,2}/\d{1,2}/\d{2,4})\s+(.+?)(?:\s+(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2})))\s*(?:\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))?$')
+    
+    for line in lines:
+        match = date_pattern.match(line)
+        if match:
+            date_str, description, amount_str = match.groups()
+            
+            try:
+                if len(date_str.split('/')[-1]) == 2:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
+                else:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except:
+                continue
+            
+            amount = _parse_amount(amount_str)
+            if amount is None:
+                continue
+            
+            merchant = _merchant_guess(description)
+            
+            txs.append(Transaction(
+                date=tx_date,
+                amount=float(amount),
+                description=description.strip(),
+                merchant=merchant,
+                classification=None,
+                reason=None
+            ))
+    
+    if txs:
+        notes.append(f"Extracted {len(txs)} transactions from USAA statement")
+    else:
+        notes.append("No transactions matched USAA format. May need format adjustment.")
+    
+    return txs, notes
+
+
+# ============================================================================
+# DISCOVER PARSERS
+# ============================================================================
+
+def parse_discover_statement(text: str, profile: BankProfile) -> Tuple[List[Transaction], List[str]]:
+    """
+    Parse Discover credit card statements.
+    
+    Discover format typically:
+    Trans Date  Post Date   Description                 Amount      Category
+    12/15/25    12/16/25    AMAZON.COM                 52.18       Shopping
+    """
+    notes = [f"Using Discover-specific parser"]
+    txs: List[Transaction] = []
+    
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    
+    # Discover uses trans date and post date
+    date_pattern = re.compile(
+        r'^(\d{1,2}/\d{1,2}/\d{2,4})\s+\d{1,2}/\d{1,2}/\d{2,4}\s+(.+?)\s+(-?\$?\d{1,3}(?:,\d{3})*(?:\.\d{2}))\s*(?:\w+)?$'
+    )
+    
+    for line in lines:
+        match = date_pattern.match(line)
+        if match:
+            date_str, description, amount_str = match.groups()
+            
+            try:
+                if len(date_str.split('/')[-1]) == 2:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
+                else:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except:
+                continue
+            
+            amount = _parse_amount(amount_str)
+            if amount is None:
+                continue
+            
+            # Credit card charges are typically shown as positive but are debits
+            if amount > 0:
+                amount = -amount
+            
+            merchant = _merchant_guess(description)
+            
+            txs.append(Transaction(
+                date=tx_date,
+                amount=float(amount),
+                description=description.strip(),
+                merchant=merchant,
+                classification=None,
+                reason=None
+            ))
+    
+    if txs:
+        notes.append(f"Extracted {len(txs)} transactions from Discover statement")
+    else:
+        notes.append("No transactions matched Discover format. May need format adjustment.")
+    
+    return txs, notes
+
+
+# ============================================================================
+# AMERICAN EXPRESS PARSERS
+# ============================================================================
+
+def parse_amex_statement(text: str, profile: BankProfile) -> Tuple[List[Transaction], List[str]]:
+    """
+    Parse American Express credit card statements.
+    
+    AmEx format can vary but typically:
+    Date        Description                     Amount
+    12/15/25    WHOLE FOODS MARKET #123        $52.18
+    12/14/25    UBER *TRIP                     $18.45
+    """
+    notes = [f"Using American Express-specific parser"]
+    txs: List[Transaction] = []
+    
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    
+    date_pattern = re.compile(r'^(\d{1,2}/\d{1,2}/\d{2,4})\s+(.+?)\s+\$?(-?\d{1,3}(?:,\d{3})*(?:\.\d{2}))$')
+    
+    for line in lines:
+        match = date_pattern.match(line)
+        if match:
+            date_str, description, amount_str = match.groups()
+            
+            try:
+                if len(date_str.split('/')[-1]) == 2:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
+                else:
+                    tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            except:
+                continue
+            
+            amount = _parse_amount(amount_str)
+            if amount is None:
+                continue
+            
+            # AmEx charges are typically shown as positive but are debits
+            if amount > 0:
+                amount = -amount
+            
+            merchant = _merchant_guess(description)
+            
+            txs.append(Transaction(
+                date=tx_date,
+                amount=float(amount),
+                description=description.strip(),
+                merchant=merchant,
+                classification=None,
+                reason=None
+            ))
+    
+    if txs:
+        notes.append(f"Extracted {len(txs)} transactions from American Express statement")
+    else:
+        notes.append("No transactions matched AmEx format. May need format adjustment.")
+    
+    return txs, notes
+
+
+# ============================================================================
+# PARSER ROUTER
+# ============================================================================
+
+BANK_PARSER_MAP = {
+    "Chase": parse_chase_statement,
+    "Bank of America": parse_bofa_statement,
+    "Wells Fargo": parse_wells_fargo_statement,
+    "Capital One": parse_capital_one_statement,
+    "USAA": parse_usaa_statement,
+    "Discover Bank": parse_discover_statement,
+    "American Express": parse_amex_statement,
+}
+
+
+def get_parser_for_bank(bank_name: str):
+    """Get the appropriate parser function for a bank"""
+    return BANK_PARSER_MAP.get(bank_name)
