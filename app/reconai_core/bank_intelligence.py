@@ -470,6 +470,88 @@ BANK_PROFILES = [
         statement_markers=["rbfcu.org"],
         known_columns=["Date", "Description", "Amount", "Balance"]
     ),
+    
+    # === ADDITIONAL REGIONAL BANKS ===
+    BankProfile(
+        name="FirstBank",
+        aliases=["1st Bank"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["efirstbank.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="Umpqua Bank",
+        aliases=["Umpqua"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["umpquabank.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="East West Bank",
+        aliases=["East West"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["eastwestbank.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="Webster Bank",
+        aliases=["Webster"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["websterbank.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="BOK Financial",
+        aliases=["BOK", "Bank of Oklahoma"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["bokfinancial.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="Texas Capital Bank",
+        aliases=["Texas Capital"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["texascapitalbank.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="Pinnacle Bank",
+        aliases=["Pinnacle Financial"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["pnfp.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="Home BancShares",
+        aliases=["Centennial Bank"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["my-centennial.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="Valley National Bank",
+        aliases=["Valley Bank"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["valleynationalbank.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
+    BankProfile(
+        name="BankUnited",
+        aliases=["Bank United"],
+        institution_type="bank",
+        date_formats=["%m/%d/%Y"],
+        statement_markers=["bankunited.com"],
+        known_columns=["Date", "Description", "Amount", "Balance"]
+    ),
 ]
 
 
@@ -523,3 +605,47 @@ def list_supported_banks() -> dict[str, list[str]]:
 def get_bank_count() -> int:
     """Get total number of supported banks"""
     return len(BANK_PROFILES)
+
+
+def search_banks(query: str) -> list[BankProfile]:
+    """
+    Search for banks matching a query string
+    
+    Args:
+        query: Search term
+        
+    Returns:
+        List of matching BankProfile objects
+    """
+    query_lower = query.lower()
+    matches = []
+    
+    for bank in BANK_PROFILES:
+        # Check name
+        if query_lower in bank.name.lower():
+            matches.append(bank)
+            continue
+        
+        # Check aliases
+        for alias in bank.aliases:
+            if query_lower in alias.lower():
+                matches.append(bank)
+                break
+    
+    return matches
+
+
+def get_banks_by_type(institution_type: str) -> list[BankProfile]:
+    """
+    Get all banks of a specific type
+    
+    Args:
+        institution_type: "bank", "credit_union", "lender", or "fintech"
+        
+    Returns:
+        List of matching BankProfile objects
+    """
+    return [
+        bank for bank in BANK_PROFILES 
+        if bank.institution_type == institution_type
+    ]
