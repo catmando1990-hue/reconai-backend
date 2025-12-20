@@ -16,6 +16,13 @@ class TextParseResult:
     notes: List[str]
 
 
+@dataclass
+class ParsedInput:
+    transactions: List[Transaction]
+    notes: List[str]
+    source_text: Optional[str] = None
+
+
 _MMDD_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-]?(\d{2,4})?\b")
 _MONTHS = (
     "January", "February", "March", "April", "May", "June",
@@ -59,6 +66,44 @@ def _parse_date_month_header(line: str) -> Optional[date]:
         return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y").date()
     except Exception:
         return None
+
+
+def _parse_amount(text: str) -> Optional[float]:
+    """Extract amount from text"""
+    m = _AMOUNT_RE.search(text or "")
+    if not m:
+        return None
+    try:
+        return float(m.group(0).replace(",", "").replace("$", "").strip())
+    except:
+        return None
+
+
+def _parse_date(text: str) -> Optional[date]:
+    """Parse date from text"""
+    # Try mm/dd format first
+    dt = _parse_date_mmdd(text)
+    if dt:
+        return dt
+    # Try month header format
+    return _parse_date_month_header(text)
+
+
+def _merchant_guess(description: str) -> Optional[str]:
+    """Extract merchant name from description"""
+    desc = _clean(description)
+    # Simple heuristic: take first few words before common payment keywords
+    keywords = ['payment', 'purchase', 'debit', 'credit', 'transfer', 'withdrawal']
+    for kw in keywords:
+        if kw in desc.lower():
+            desc = desc.lower().split(kw)[0].strip()
+            break
+    
+    # Return first 3 words as merchant name
+    words = desc.split()
+    if words:
+        return ' '.join(words[:min(3, len(words))]).title()
+    return None
 
 
 def parse_text_lines(text: str) -> TextParseResult:
@@ -127,3 +172,71 @@ def parse_text_lines(text: str) -> TextParseResult:
         notes.append(f"Generic text parser extracted {len(txs)} candidate transactions.")
 
     return TextParseResult(transactions=txs, notes=notes)
+
+
+def parse_structured_transactions(transactions: List[Transaction]) -> ParsedInput:
+    """
+    When transactions are already structured (from API, etc)
+    """
+    return ParsedInput(
+        transactions=transactions,
+        notes=["Using pre-structured transaction data."],
+        source_text=None
+    )
+
+
+def parse_csv_text(csv_text: str) -> ParsedInput:
+    """
+    Parse CSV format text
+    """
+    import csv
+    from io import StringIO
+    
+    lines = [_clean(l) for l in csv_text.splitlines() if _clean(l)]
+    if not lines:
+        return ParsedInput(
+            transactions=[],
+            notes=["No CSV data found."],
+            source_text=csv_text
+        )
+    
+    reader = csv.DictReader(StringIO(csv_text))
+    txs = []
+    
+    for row in reader:
+        # Try to parse date from common column names
+        dt = None
+        for col in ['date', 'Date', 'DATE', 'transaction_date', 'Transaction Date']:
+            if col in row and row[col]:
+                dt = _parse_date_mmdd(row[col])
+                if dt:
+                    break
+        
+        # Try to parse amount
+        amt = 0.0
+        for col in ['amount', 'Amount', 'AMOUNT']:
+            if col in row and row[col]:
+                try:
+                    amt = float(row[col].replace(',', '').replace('$', ''))
+                    break
+                except:
+                    pass
+        
+        # Get description
+        desc = row.get('description') or row.get('Description') or row.get('DESCRIPTION') or ''
+        
+        if dt or amt:
+            txs.append(Transaction(
+                date=dt,
+                amount=amt,
+                description=desc,
+                merchant=None,
+                classification=None,
+                reason=None
+            ))
+    
+    return ParsedInput(
+        transactions=txs,
+        notes=[f"Parsed {len(txs)} transactions from CSV."],
+        source_text=csv_text
+    )

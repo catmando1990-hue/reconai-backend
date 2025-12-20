@@ -233,3 +233,6 @@ def parse_bank_statement_text(text: str) -> BankParseResult:
     else:
         notes.append("No bank detected from PDF text.")
     return BankParseResult(bank_name=bank, transactions=[], notes=notes)
+
+# Alias for compatibility
+detect_institution = detect_bank

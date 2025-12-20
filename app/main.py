@@ -1,12 +1,12 @@
 # app/main.py
 
 from __future__ import annotations
-
+# from app.routers import claude  # TEMPORARILY COMMENTED OUT
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers.files import router as files_router
+# from app.routers.files import router as files_router  # TEMPORARILY COMMENTED OUT
 from app.routers.exports import router as exports_router
 from app.routers.reconai import router as reconai_router
 from app.routers.transactions import router as transactions_router
@@ -26,8 +26,6 @@ def get_allowed_origins() -> list[str]:
     return [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        # Add deployed frontend later if needed
-        # "https://your-frontend-domain.com",
     ]
 
 
@@ -59,7 +57,7 @@ def root():
 
 
 # Routers
-app.include_router(files_router)
+# app.include_router(files_router)  # TEMPORARILY COMMENTED OUT
 app.include_router(exports_router)
 app.include_router(reconai_router)
 app.include_router(transactions_router)
@@ -68,3 +66,4 @@ app.include_router(tax_router)
 app.include_router(credit_router)
 app.include_router(feedback_router)
 app.include_router(plaid_router)
+# app.include_router(claude.router)  # TEMPORARILY COMMENTED OUT

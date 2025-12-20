@@ -20,3 +20,8 @@ data/reconai.db
 
 # Backups
 *.bak
+
+# Environment variables
+.env
+.env.local
+.env.*.local
