@@ -8,7 +8,6 @@ import re
 from datetime import date, datetime
 from typing import List, Optional, Tuple
 from app.models import Transaction
-from app.reconai_core.parser import _parse_amount, _merchant_guess
 from app.reconai_core.bank_intelligence import BankProfile
 
 
