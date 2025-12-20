@@ -32,6 +32,16 @@ def get_allowed_origins() -> list[str]:
 
 
 app = FastAPI(title="ReconAI Backend MVP", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://reconai-frontend.onrender.com",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # CORS (fixes browser blocked requests)
 app.add_middleware(
