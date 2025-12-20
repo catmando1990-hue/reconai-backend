@@ -41,7 +41,7 @@ class MerchantRecognizer:
         self.classifier = None
         self.merchant_patterns = self._load_patterns()
         self.known_merchants = self._load_merchant_database()
-        self._load_bank_patterns()
+       
         
     def _load_patterns(self) -> Dict[str, Dict]:
         """Load regex patterns for common merchant formats"""
