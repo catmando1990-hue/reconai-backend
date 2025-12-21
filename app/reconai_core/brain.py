@@ -189,12 +189,6 @@ class ReconAIBrain:
             for t in samples:
                 notes.append(f"- {t.merchant or t.description}: {t.reason}")
 
-        # Bank detection note (if parser provided source text)
-        if parsed.source_text:
-            inst = detect_institution(parsed.source_text)
-            if inst:
-                notes.append(f"Institution hint: {inst}")
-
         return TransactionsResponse(
             total_transactions=total,
             total_outflow=float(outflow),
