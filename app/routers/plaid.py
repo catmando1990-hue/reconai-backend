@@ -33,6 +33,51 @@ router = APIRouter()
 
 
 # =============================================================================
+# EXPENSE TYPE MAPPING (Category -> Business/Personal/School/Other)
+# =============================================================================
+
+EXPENSE_TYPE_MAP = {
+    # BUSINESS expenses (tax deductible for business)
+    "Travel - Airfare": "Business",
+    "Travel - Lodging": "Business",
+    "Travel - Ground Transportation": "Business",
+    "Transportation": "Business",
+    "Office Supplies": "Business",
+    "Software & Subscriptions": "Business",
+    "Professional Services": "Business",
+    "Marketing & Advertising": "Business",
+    "Equipment & Hardware": "Business",
+    "Utilities & Phone": "Business",
+    "Insurance": "Business",
+    "Payroll": "Business",
+    "Payment Processing": "Business",
+    "Taxes & Licenses": "Business",
+    "Bank Fees & Interest": "Business",
+    
+    # PERSONAL expenses (not deductible)
+    "Meals & Entertainment": "Personal",  # Default to personal unless business meal
+    "Health & Fitness": "Personal",
+    "Owner Draw / Personal": "Personal",
+    "Groceries": "Personal",
+    "Shopping": "Personal",
+    "Entertainment": "Personal",
+    
+    # TRANSFERS (neither business nor personal - just moving money)
+    "Credit Card Payment": "Transfer",
+    "Payment/Transfer": "Transfer",
+    "Income / Deposit": "Income",
+    "Interest/Fees": "Business",  # Usually business-related
+    
+    # OTHER / UNCATEGORIZED
+    "Uncategorized": "Other",
+}
+
+def get_expense_type(category: str) -> str:
+    """Map a category to expense type (Business/Personal/School/Transfer/Income/Other)."""
+    return EXPENSE_TYPE_MAP.get(category, "Other")
+
+
+# =============================================================================
 # DETERMINISTIC RULES (Fast, Free - Check First)
 # =============================================================================
 
@@ -104,6 +149,15 @@ MERCHANT_RULES = {
     "hertz": ("Travel - Ground Transportation", "Car rental"),
     "enterprise": ("Travel - Ground Transportation", "Car rental"),
     "avis": ("Travel - Ground Transportation", "Car rental"),
+    
+    # School/Education
+    "tuition": ("Education", "School tuition"),
+    "university": ("Education", "University expense"),
+    "college": ("Education", "College expense"),
+    "bookstore": ("Education", "Textbooks/supplies"),
+    "chegg": ("Education", "Educational service"),
+    "coursera": ("Education", "Online learning"),
+    "udemy": ("Education", "Online learning"),
 }
 
 def deterministic_classify(merchant: str, amount: float):
@@ -122,7 +176,7 @@ def deterministic_classify(merchant: str, amount: float):
 # =============================================================================
 
 CLASSIFICATION_PROMPT = """You are a financial classification expert for small businesses and contractors. 
-Classify this transaction into the most appropriate business expense category.
+Classify this transaction into the most appropriate category AND determine the expense type.
 
 Transaction:
 - Merchant: {merchant}
@@ -151,15 +205,27 @@ Available categories:
 - Owner Draw / Personal
 - Income / Deposit
 - Health & Fitness
+- Education
+- Groceries
+- Shopping
+- Entertainment
 - Uncategorized
 
-Respond with ONLY valid JSON (no markdown, no code blocks, no explanation):
-{{"category": "...", "confidence": 85, "reasoning": "Brief explanation"}}
+Expense types:
+- Business (tax deductible business expenses)
+- Personal (personal/non-deductible expenses)
+- School (education-related expenses)
+- Transfer (moving money between accounts)
+- Income (money received)
+- Other (unclear/mixed purpose)
+
+Respond with ONLY valid JSON (no markdown, no code blocks):
+{{"category": "...", "expense_type": "Business", "confidence": 85, "reasoning": "Brief explanation"}}
 
 Rules:
-- confidence: 70-99 based on how certain you are
-- For deposits/credits (negative amounts shown as positive), consider if it's income, refund, or transfer
-- For ambiguous merchants, make your best guess but lower confidence
+- confidence: 70-99 based on certainty
+- Default meals to Personal unless clearly a business meal
+- Transportation during work hours = Business
 - Keep reasoning under 100 characters"""
 
 def get_anthropic_client():
@@ -174,12 +240,12 @@ async def ai_classify(merchant: str, amount: float, date: str):
     client = get_anthropic_client()
     
     if not client:
-        return ("Uncategorized", 60, "AI not configured - add ANTHROPIC_API_KEY")
+        return ("Uncategorized", "Other", 60, "AI not configured - add ANTHROPIC_API_KEY")
     
     try:
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=150,
+            max_tokens=200,
             messages=[{
                 "role": "user",
                 "content": CLASSIFICATION_PROMPT.format(
@@ -195,14 +261,15 @@ async def ai_classify(merchant: str, amount: float, date: str):
         
         return (
             result.get("category", "Uncategorized"),
+            result.get("expense_type", "Other"),
             result.get("confidence", 75),
             result.get("reasoning", "AI classification")
         )
         
     except json.JSONDecodeError as e:
-        return ("Uncategorized", 60, f"AI response parse error")
+        return ("Uncategorized", "Other", 60, "AI response parse error")
     except Exception as e:
-        return ("Uncategorized", 50, f"AI error: {str(e)[:40]}")
+        return ("Uncategorized", "Other", 50, f"AI error: {str(e)[:40]}")
 
 
 # =============================================================================
@@ -332,7 +399,7 @@ def get_plaid_transactions(
 
 
 # =============================================================================
-# RECONAI CLASSIFICATION ENDPOINT (Hybrid: Rules + AI)
+# RECONAI CLASSIFICATION ENDPOINT (Hybrid: Rules + AI + Expense Type)
 # =============================================================================
 
 class ClassifyRequest(BaseModel):
@@ -341,7 +408,7 @@ class ClassifyRequest(BaseModel):
 async def classify_transactions(request: ClassifyRequest):
     """
     Hybrid classification: Deterministic rules first, Claude AI fallback.
-    Called from main.py at /classify-transactions
+    Now includes expense_type (Business/Personal/School/Transfer/Income/Other)
     """
     results = []
     
@@ -355,14 +422,16 @@ async def classify_transactions(request: ClassifyRequest):
         
         if rule_result:
             category, confidence, reasoning = rule_result
+            expense_type = get_expense_type(category)
             reasoning = f"[Rule] {reasoning}"
         else:
             # Fall back to Claude AI for ambiguous transactions
-            category, confidence, reasoning = await ai_classify(merchant, amount, date)
+            category, expense_type, confidence, reasoning = await ai_classify(merchant, amount, date)
             reasoning = f"[AI] {reasoning}"
         
         results.append({
             "category": category,
+            "expense_type": expense_type,
             "confidence": confidence,
             "reasoning": reasoning
         })
