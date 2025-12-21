@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 
 # Import all routers that exist
 from app.routers.files import router as files_router
@@ -27,14 +28,14 @@ def get_allowed_origins() -> list[str]:
         return [o.strip() for o in env.split(",") if o.strip()]
     
     # Default: support both common dev ports + production
+    # NOTE: Do NOT use wildcard "https://*.vercel.app" here - use allow_origin_regex instead
     return [
         "http://localhost:5173",      # Vite default
         "http://127.0.0.1:5173",
         "http://localhost:3000",      # Alternative React port
         "http://127.0.0.1:3000",
-        "https://reconai-frontend.onrender.com",  # Production (old)
-        "https://reconai-frontend.vercel.app",     # ✅ Production (Vercel)
-        "https://*.vercel.app",                    # ✅ Vercel preview URLs
+        "https://reconai-frontend.onrender.com",  # Production (Render)
+        "https://reconai-frontend.vercel.app",     # Production (Vercel)
     ]
 
 
@@ -51,10 +52,11 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
+    allow_origin_regex=r"^https://.*\.vercel\.app$",  # ✅ Matches Vercel preview URLs
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],  # ✅ Explicit methods including OPTIONS
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=[],  # ✅ Fixed: removed invalid "*"
     max_age=3600,  # Cache preflight requests for 1 hour
 )
 
@@ -82,23 +84,16 @@ def health_check():
 
 # ============================================================================
 # MOUNT CLASSIFY ENDPOINT AT ROOT LEVEL (NO PREFIX)
-# This allows /classify-transactions instead of /api/plaid/classify-transactions
 # ============================================================================
 
-from app.routers.plaid import classify_transactions, classify_transactions_options
+from app.routers.plaid import classify_transactions
 
 # Mount at root level so frontend can call /classify-transactions directly
+# Note: CORSMiddleware handles OPTIONS automatically, no need for separate handler
 app.add_api_route(
     "/classify-transactions",
     classify_transactions,
     methods=["POST"],
-    tags=["classification"]
-)
-
-app.add_api_route(
-    "/classify-transactions",
-    classify_transactions_options,
-    methods=["OPTIONS"],
     tags=["classification"]
 )
 
@@ -129,9 +124,11 @@ async def startup_event():
     
     print("🚀 ReconAI Backend starting up...")
     print("📊 Initializing database...")
-    init_db()
+    # Run synchronous DB init in thread pool to avoid blocking event loop
+    await run_in_threadpool(init_db)
     print("✅ Database ready")
     print(f"📡 CORS enabled for: {get_allowed_origins()}")
+    print(f"📡 CORS regex: ^https://.*\.vercel\.app$")
     print("🔗 Classify endpoint mounted at: /classify-transactions")
 
 
