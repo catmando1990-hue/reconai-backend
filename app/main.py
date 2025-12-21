@@ -32,7 +32,9 @@ def get_allowed_origins() -> list[str]:
         "http://127.0.0.1:5173",
         "http://localhost:3000",      # Alternative React port
         "http://127.0.0.1:3000",
-        "https://reconai-frontend.onrender.com",  # Production
+        "https://reconai-frontend.onrender.com",  # Production (old)
+        "https://reconai-frontend.vercel.app",     # ✅ Production (Vercel)
+        "https://*.vercel.app",                    # ✅ Vercel preview URLs
     ]
 
 
@@ -43,17 +45,24 @@ app = FastAPI(
     description="Financial Intelligence API for ReconAI"
 )
 
-# Add CORS middleware (ONLY ONCE)
+# ============================================================================
+# CORS MIDDLEWARE - MUST BE CONFIGURED BEFORE ROUTES
+# ============================================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],  # ✅ Explicit methods including OPTIONS
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 
-# Root endpoint (supports both GET and HEAD for health checks)
+# ============================================================================
+# ROOT & HEALTH ENDPOINTS
+# ============================================================================
+
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {
@@ -63,7 +72,6 @@ def root():
     }
 
 
-# Health check endpoint
 @app.get("/health")
 def health_check():
     return {
@@ -72,7 +80,33 @@ def health_check():
     }
 
 
-# Include all routers
+# ============================================================================
+# MOUNT CLASSIFY ENDPOINT AT ROOT LEVEL (NO PREFIX)
+# This allows /classify-transactions instead of /api/plaid/classify-transactions
+# ============================================================================
+
+from app.routers.plaid import classify_transactions, classify_transactions_options
+
+# Mount at root level so frontend can call /classify-transactions directly
+app.add_api_route(
+    "/classify-transactions",
+    classify_transactions,
+    methods=["POST"],
+    tags=["classification"]
+)
+
+app.add_api_route(
+    "/classify-transactions",
+    classify_transactions_options,
+    methods=["OPTIONS"],
+    tags=["classification"]
+)
+
+
+# ============================================================================
+# INCLUDE ALL ROUTERS (WITH THEIR ORIGINAL PREFIXES)
+# ============================================================================
+
 app.include_router(files_router)
 app.include_router(exports_router)
 app.include_router(reconai_router)
@@ -85,7 +119,10 @@ app.include_router(plaid_router)
 app.include_router(claude.router)
 
 
-# Startup event
+# ============================================================================
+# STARTUP & SHUTDOWN EVENTS
+# ============================================================================
+
 @app.on_event("startup")
 async def startup_event():
     from app.db import init_db
@@ -95,9 +132,9 @@ async def startup_event():
     init_db()
     print("✅ Database ready")
     print(f"📡 CORS enabled for: {get_allowed_origins()}")
+    print("🔗 Classify endpoint mounted at: /classify-transactions")
 
 
-# Shutdown event
 @app.on_event("shutdown")
 async def shutdown_event():
     print("👋 ReconAI Backend shutting down...")
