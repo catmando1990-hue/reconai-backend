@@ -3,13 +3,8 @@ from __future__ import annotations
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import merchant
-from app.routers import lender
-from app.routers import compliance
-from app.routers import entity
-from app.routers import veteran
 
-# Import all routers
+# Import all routers that exist
 from app.routers.files import router as files_router
 from app.routers.exports import router as exports_router
 from app.routers.reconai import router as reconai_router
@@ -20,6 +15,7 @@ from app.routers.credit import router as credit_router
 from app.routers.feedback import router as feedback_router
 from app.routers.plaid import router as plaid_router
 from app.routers import claude
+
 
 def get_allowed_origins() -> list[str]:
     """
@@ -39,6 +35,7 @@ def get_allowed_origins() -> list[str]:
         "https://reconai-frontend.onrender.com",  # Production
     ]
 
+
 # Initialize FastAPI app
 app = FastAPI(
     title="ReconAI Backend",
@@ -55,6 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Root endpoint (supports both GET and HEAD for health checks)
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
@@ -64,6 +62,7 @@ def root():
         "version": "0.1.0"
     }
 
+
 # Health check endpoint
 @app.get("/health")
 def health_check():
@@ -71,6 +70,7 @@ def health_check():
         "status": "healthy",
         "service": "reconai-backend"
     }
+
 
 # Include all routers
 app.include_router(files_router)
@@ -83,11 +83,7 @@ app.include_router(credit_router)
 app.include_router(feedback_router)
 app.include_router(plaid_router)
 app.include_router(claude.router)
-app.include_router(merchant.router)
-app.include_router(lender.router)
-app.include_router(compliance.router)
-app.include_router(entity.router)
-app.include_router(veteran.router)
+
 
 # Startup event
 @app.on_event("startup")
@@ -99,6 +95,7 @@ async def startup_event():
     init_db()
     print("✅ Database ready")
     print(f"📡 CORS enabled for: {get_allowed_origins()}")
+
 
 # Shutdown event
 @app.on_event("shutdown")
