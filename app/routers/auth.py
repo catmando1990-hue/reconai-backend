@@ -198,6 +198,19 @@ async def get_current_user_id(
     """Dependency: Get current user ID"""
     return current_user.id
 
+async def get_current_organization_id(
+    authorization: Optional[str] = Header(None)
+) -> str:
+    """
+    Dependency: Get current organization ID from JWT or header
+
+    For now, returns a default organization ID.
+    TODO: Extract from JWT or require X-Organization-ID header
+    """
+    # Temporary: return a default organization ID
+    # In production, this should be extracted from the JWT or require an X-Organization-ID header
+    return "default-org-id"
+
 # =========================================================================
 # AUTHENTICATION ENDPOINTS
 # =========================================================================

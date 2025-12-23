@@ -25,7 +25,8 @@ from .models import (
     PaymentMethod,
     APAgingReport,
     APAgingBucket,
-    Vendor1099Report
+    Vendor1099Report,
+    Organization1099Summary
 )
 
 from .engine import BillsEngine
@@ -46,5 +47,6 @@ __all__ = [
     "APAgingReport",
     "APAgingBucket",
     "Vendor1099Report",
+    "Organization1099Summary",
     "BillsEngine"
 ]
