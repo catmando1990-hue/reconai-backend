@@ -49,6 +49,8 @@ from app.routers.stripe_webhooks import router as stripe_webhooks_router
 from app.routers.compliance import router as compliance_router
 from app.routers import claude
 from app.routers.health import router as health_router, set_startup_time
+from app.routers.financial_reports import router as financial_reports_router
+from app.routers.tax_intelligence import router as tax_intelligence_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -160,6 +162,8 @@ app.include_router(credit_router)
 app.include_router(feedback_router)
 app.include_router(plaid_router)
 app.include_router(bookkeeping_router)
+app.include_router(financial_reports_router)
+app.include_router(tax_intelligence_router)
 app.include_router(claude.router)
 app.include_router(health_router)
 
@@ -170,8 +174,12 @@ async def startup_event():
     from app.bookkeeping.engine import BookkeeperEngine
     from app.invoicing.engine import InvoicingEngine
     from app.bills.engine import BillsEngine
+    from app.financial_reports.engine import FinancialReportsEngine
+    from app.tax_intelligence.engine import TaxIntelligenceEngine
     from app.routers.invoicing import set_invoicing_engine
     from app.routers.bills_ap import set_bills_engine
+    from app.routers.financial_reports import set_reports_engine
+    from app.routers.tax_intelligence import set_tax_engine
     from app.db import DB_PATH
 
     print("🚀 ReconAI Backend starting up...")
@@ -193,12 +201,24 @@ async def startup_event():
     set_bills_engine(bills)
     print("✅ Bills & AP engine ready")
 
+    print("📈 Initializing financial reports engine...")
+    reports = await run_in_threadpool(lambda: FinancialReportsEngine(bookkeeper_engine=bookkeeper))
+    set_reports_engine(reports)
+    print("✅ Financial reports engine ready")
+
+    print("💼 Initializing tax intelligence engine...")
+    tax = await run_in_threadpool(lambda: TaxIntelligenceEngine(reports_engine=reports))
+    set_tax_engine(tax)
+    print("✅ Tax intelligence engine ready")
+
     print(f"📡 CORS enabled for: {get_allowed_origins()}")
     print(f"📡 CORS regex: ^https://.*\.vercel\.app$")
     print("🔗 Classify endpoint mounted at: /classify-transactions")
     print("🔗 Bookkeeping API mounted at: /api/bookkeeping")
     print("🔗 Invoicing API mounted at: /api/invoicing")
     print("🔗 Bills & AP API mounted at: /api/bills")
+    print("🔗 Financial Reports API mounted at: /api/financial-reports")
+    print("🔗 Tax Intelligence API mounted at: /api/tax-intelligence")
     set_startup_time()
     print("🔍 Sentry initialized" if os.getenv("SENTRY_DSN") else "⚠️  Sentry not configured")
 
