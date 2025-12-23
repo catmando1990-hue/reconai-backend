@@ -1,6 +1,18 @@
 # app/main.py
 from __future__ import annotations
 import os
+import sentry_sdk
+
+# Initialize Sentry for error tracking
+sentry_dsn = os.getenv("SENTRY_DSN")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        send_default_pii=True,
+        traces_sample_rate=1.0,
+        environment=os.getenv("ENVIRONMENT", "development"),
+    )
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -35,81 +47,45 @@ from app.routers import claude
 
 
 def get_allowed_origins() -> list[str]:
-    """
-    Allow local dev frontend + production.
-    Override with CORS_ORIGINS env var if needed.
-    """
     env = os.getenv("CORS_ORIGINS", "").strip()
     if env:
         return [o.strip() for o in env.split(",") if o.strip()]
-    
-    # Default: support both common dev ports + production
-    # NOTE: Do NOT use wildcard "https://*.vercel.app" here - use allow_origin_regex instead
     return [
-        "http://localhost:5173",      # Vite default
+        "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:3000",      # Next.js default port
+        "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:3001",      # Next.js alternate port (YOUR FRONTEND)
+        "http://localhost:3001",
         "http://127.0.0.1:3001",
-        "https://reconai-frontend.onrender.com",  # Production (Render)
-        "https://reconai-frontend.vercel.app",     # Production (Vercel)
+        "https://reconai-frontend.onrender.com",
+        "https://reconai-frontend.vercel.app",
     ]
 
 
-# ============================================================================
-# SECURITY HEADERS MIDDLEWARE
-# ============================================================================
-
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security headers to all responses"""
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-
-        # Prevent MIME type sniffing
         response.headers["X-Content-Type-Options"] = "nosniff"
-
-        # Prevent clickjacking attacks
         response.headers["X-Frame-Options"] = "DENY"
-
-        # Enable XSS protection (legacy browsers)
         response.headers["X-XSS-Protection"] = "1; mode=block"
-
-        # Force HTTPS in production (HSTS)
         if os.getenv("ENVIRONMENT") == "production":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-
-        # Content Security Policy
         response.headers["Content-Security-Policy"] = "default-src 'self'"
-
-        # Referrer policy
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-
-        # Permissions policy
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-
         return response
 
 
-# Initialize FastAPI app
 app = FastAPI(
     title="ReconAI Backend",
     version="0.1.0",
     description="Financial Intelligence API for ReconAI"
 )
 
-# ============================================================================
-# MIDDLEWARE - ORDER MATTERS!
-# ============================================================================
-
-# 1. Rate limiting (prevent abuse)
 from app.middleware import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)
-
-# 2. Security headers (applied to all responses)
 app.add_middleware(SecurityHeadersMiddleware)
 
-# 3. Trusted host (prevent host header attacks)
 if os.getenv("ENVIRONMENT") == "production":
     app.add_middleware(
         TrustedHostMiddleware,
@@ -120,22 +96,17 @@ if os.getenv("ENVIRONMENT") == "production":
         ]
     )
 
-# 4. CORS (must be after security headers)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
-    allow_origin_regex=r"^https://.*\.vercel\.app$",  # ✅ Matches Vercel preview URLs
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allow_headers=["*"],
-    expose_headers=[],  # ✅ Fixed: removed invalid "*"
-    max_age=3600,  # Cache preflight requests for 1 hour
+    expose_headers=[],
+    max_age=3600,
 )
 
-
-# ============================================================================
-# ROOT & HEALTH ENDPOINTS
-# ============================================================================
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
@@ -154,25 +125,14 @@ def health_check():
     }
 
 
-# ============================================================================
-# MOUNT CLASSIFY ENDPOINT AT ROOT LEVEL (NO PREFIX)
-# ============================================================================
-
 from app.routers.plaid import classify_transactions
 
-# Mount at root level so frontend can call /classify-transactions directly
-# Note: CORSMiddleware handles OPTIONS automatically, no need for separate handler
 app.add_api_route(
     "/classify-transactions",
     classify_transactions,
     methods=["POST"],
     tags=["classification"]
 )
-
-
-# ============================================================================
-# INCLUDE ALL ROUTERS (WITH THEIR ORIGINAL PREFIXES)
-# ============================================================================
 
 app.include_router(auth_router)
 app.include_router(users_router)
@@ -199,10 +159,6 @@ app.include_router(bookkeeping_router)
 app.include_router(claude.router)
 
 
-# ============================================================================
-# STARTUP & SHUTDOWN EVENTS
-# ============================================================================
-
 @app.on_event("startup")
 async def startup_event():
     from app.db import init_db
@@ -211,11 +167,9 @@ async def startup_event():
 
     print("ReconAI Backend starting up...")
     print("Initializing database...")
-    # Run synchronous DB init in thread pool to avoid blocking event loop
     await run_in_threadpool(init_db)
     print("Database ready")
 
-    # Initialize bookkeeping engine
     print("Initializing bookkeeping engine...")
     await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
     print("Bookkeeping engine ready")
@@ -223,17 +177,7 @@ async def startup_event():
     print(f"CORS enabled for: {get_allowed_origins()}")
     print(f"CORS regex: ^https://.*\.vercel\.app$")
     print("Classify endpoint mounted at: /classify-transactions")
-    print("Auth API mounted at: /api/auth")
-    print("Organizations API mounted at: /api/organizations")
-    print("Entities API mounted at: /api/entities")
-    print("Contact API mounted at: /api/contact")
-    print("Newsletter API mounted at: /api/newsletter")
-    print("Customers API mounted at: /api/customers")
-    print("Invoices API mounted at: /api/invoices")
-    print("Reports API mounted at: /api/reports")
-    print("Stripe Webhooks mounted at: /api/webhooks/stripe")
-    print("Compliance API mounted at: /api/compliance")
-    print("Bookkeeping API mounted at: /api/bookkeeping")
+    print("Sentry initialized" if os.getenv("SENTRY_DSN") else "Sentry not configured")
 
 
 @app.on_event("shutdown")
