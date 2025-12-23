@@ -44,6 +44,7 @@ from app.routers.reports import router as reports_router
 from app.routers.stripe_webhooks import router as stripe_webhooks_router
 from app.routers.compliance import router as compliance_router
 from app.routers import claude
+from app.routers.health import router as health_router, set_startup_time
 
 
 def get_allowed_origins() -> list[str]:
@@ -117,12 +118,7 @@ def root():
     }
 
 
-@app.get("/health")
-def health_check():
-    return {
-        "status": "healthy",
-        "service": "reconai-backend"
-    }
+# Health endpoint moved to health_router
 
 
 from app.routers.plaid import classify_transactions
@@ -157,6 +153,7 @@ app.include_router(feedback_router)
 app.include_router(plaid_router)
 app.include_router(bookkeeping_router)
 app.include_router(claude.router)
+app.include_router(health_router)
 
 
 @app.on_event("startup")
@@ -177,9 +174,12 @@ async def startup_event():
     print(f"CORS enabled for: {get_allowed_origins()}")
     print(f"CORS regex: ^https://.*\.vercel\.app$")
     print("Classify endpoint mounted at: /classify-transactions")
+    set_startup_time()
     print("Sentry initialized" if os.getenv("SENTRY_DSN") else "Sentry not configured")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     print("ReconAI Backend shutting down...")
+
+
