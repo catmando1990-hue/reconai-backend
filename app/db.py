@@ -315,201 +315,200 @@ def init_db() -> None:
         # INVOICING & CUSTOMERS
         # =================================================================
 
-        # Customers
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS customers (
-                id TEXT PRIMARY KEY,
-                organization_id TEXT NOT NULL,
-                entity_id TEXT,
-                name TEXT NOT NULL,
-                email TEXT,
-                phone TEXT,
-                address_line1 TEXT,
-                address_line2 TEXT,
-                city TEXT,
-                state TEXT,
-                zip TEXT,
-                country TEXT DEFAULT 'US',
-                company_name TEXT,
-                tax_id TEXT,
-                payment_terms INTEGER DEFAULT 30,
-                outstanding_balance REAL DEFAULT 0.0,
-                is_active INTEGER DEFAULT 1,
-                notes TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL
-            )
-        """)
+        # Customers, Invoices, Invoice Items, and Payments tables now created by InvoicingEngine
+        # Commented out to avoid conflict with the new AR system
+        # conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS customers (
+        #         id TEXT PRIMARY KEY,
+        #         organization_id TEXT NOT NULL,
+        #         entity_id TEXT,
+        #         name TEXT NOT NULL,
+        #         email TEXT,
+        #         phone TEXT,
+        #         address_line1 TEXT,
+        #         address_line2 TEXT,
+        #         city TEXT,
+        #         state TEXT,
+        #         zip TEXT,
+        #         country TEXT DEFAULT 'US',
+        #         company_name TEXT,
+        #         tax_id TEXT,
+        #         payment_terms INTEGER DEFAULT 30,
+        #         outstanding_balance REAL DEFAULT 0.0,
+        #         is_active INTEGER DEFAULT 1,
+        #         notes TEXT,
+        #         created_at TEXT DEFAULT (datetime('now')),
+        #         updated_at TEXT DEFAULT (datetime('now')),
+        #         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        #         FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL
+        #     )
+        # """)
 
-        # Invoices
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS invoices (
-                id TEXT PRIMARY KEY,
-                organization_id TEXT NOT NULL,
-                entity_id TEXT,
-                customer_id TEXT NOT NULL,
-                invoice_number TEXT NOT NULL,
-                issue_date TEXT NOT NULL,
-                due_date TEXT NOT NULL,
-                status TEXT DEFAULT 'draft',
-                subtotal REAL NOT NULL DEFAULT 0.0,
-                tax_rate REAL DEFAULT 0.0,
-                tax_amount REAL DEFAULT 0.0,
-                discount_amount REAL DEFAULT 0.0,
-                total_amount REAL NOT NULL DEFAULT 0.0,
-                amount_paid REAL DEFAULT 0.0,
-                currency TEXT DEFAULT 'USD',
-                notes TEXT,
-                terms TEXT,
-                footer TEXT,
-                sent_at TEXT,
-                paid_at TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
-                FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT,
-                UNIQUE(organization_id, invoice_number)
-            )
-        """)
+        # conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS invoices (
+        #         id TEXT PRIMARY KEY,
+        #         organization_id TEXT NOT NULL,
+        #         entity_id TEXT,
+        #         customer_id TEXT NOT NULL,
+        #         invoice_number TEXT NOT NULL,
+        #         issue_date TEXT NOT NULL,
+        #         due_date TEXT NOT NULL,
+        #         status TEXT DEFAULT 'draft',
+        #         subtotal REAL NOT NULL DEFAULT 0.0,
+        #         tax_rate REAL DEFAULT 0.0,
+        #         tax_amount REAL DEFAULT 0.0,
+        #         discount_amount REAL DEFAULT 0.0,
+        #         total_amount REAL NOT NULL DEFAULT 0.0,
+        #         amount_paid REAL DEFAULT 0.0,
+        #         currency TEXT DEFAULT 'USD',
+        #         notes TEXT,
+        #         terms TEXT,
+        #         footer TEXT,
+        #         sent_at TEXT,
+        #         paid_at TEXT,
+        #         created_at TEXT DEFAULT (datetime('now')),
+        #         updated_at TEXT DEFAULT (datetime('now')),
+        #         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        #         FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+        #         FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT,
+        #         UNIQUE(organization_id, invoice_number)
+        #     )
+        # """)
 
-        # Invoice Line Items
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS invoice_items (
-                id TEXT PRIMARY KEY,
-                invoice_id TEXT NOT NULL,
-                description TEXT NOT NULL,
-                quantity REAL NOT NULL DEFAULT 1,
-                unit_price REAL NOT NULL DEFAULT 0.0,
-                amount REAL NOT NULL DEFAULT 0.0,
-                account_id TEXT,
-                sort_order INTEGER DEFAULT 0,
-                FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
-            )
-        """)
+        # conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS invoice_items (
+        #         id TEXT PRIMARY KEY,
+        #         invoice_id TEXT NOT NULL,
+        #         description TEXT NOT NULL,
+        #         quantity REAL NOT NULL DEFAULT 1,
+        #         unit_price REAL NOT NULL DEFAULT 0.0,
+        #         amount REAL NOT NULL DEFAULT 0.0,
+        #         account_id TEXT,
+        #         sort_order INTEGER DEFAULT 0,
+        #         FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+        #     )
+        # """)
 
-        # Payments
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS payments (
-                id TEXT PRIMARY KEY,
-                organization_id TEXT NOT NULL,
-                entity_id TEXT,
-                customer_id TEXT NOT NULL,
-                invoice_id TEXT,
-                payment_date TEXT NOT NULL,
-                amount REAL NOT NULL,
-                payment_method TEXT,
-                reference_number TEXT,
-                notes TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
-                FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT,
-                FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL
-            )
-        """)
+        # conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS payments (
+        #         id TEXT PRIMARY KEY,
+        #         organization_id TEXT NOT NULL,
+        #         entity_id TEXT,
+        #         customer_id TEXT NOT NULL,
+        #         invoice_id TEXT,
+        #         payment_date TEXT NOT NULL,
+        #         amount REAL NOT NULL,
+        #         payment_method TEXT,
+        #         reference_number TEXT,
+        #         notes TEXT,
+        #         created_at TEXT DEFAULT (datetime('now')),
+        #         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        #         FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+        #         FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT,
+        #         FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL
+        #     )
+        # """)
 
-        # Create indexes for invoicing tables
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_org ON customers(organization_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_entity ON customers(entity_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_org ON invoices(organization_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_due_date ON invoices(due_date)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(organization_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id)")
+        # Indexes for invoicing tables now created by InvoicingEngine
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_org ON customers(organization_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_entity ON customers(entity_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_org ON invoices(organization_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_due_date ON invoices(due_date)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(organization_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id)")
 
         # =================================================================
         # VENDORS & BILLS (ACCOUNTS PAYABLE)
         # =================================================================
 
-        # Vendors
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS vendors (
-                id TEXT PRIMARY KEY,
-                organization_id TEXT NOT NULL,
-                entity_id TEXT,
-                name TEXT NOT NULL,
-                email TEXT,
-                phone TEXT,
-                address TEXT,
-                city TEXT,
-                state TEXT,
-                zip TEXT,
-                payment_terms INTEGER DEFAULT 30,
-                ein TEXT,
-                notes TEXT,
-                total_billed REAL DEFAULT 0.0,
-                total_paid REAL DEFAULT 0.0,
-                amount_owed REAL DEFAULT 0.0,
-                active_bills INTEGER DEFAULT 0,
-                is_active INTEGER DEFAULT 1,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL
-            )
-        """)
+        # Vendors table is now created by BillsEngine (app/bills/engine.py)
+        # Commented out to avoid conflict with the new AP system
+        # conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS vendors (
+        #         id TEXT PRIMARY KEY,
+        #         organization_id TEXT NOT NULL,
+        #         entity_id TEXT,
+        #         name TEXT NOT NULL,
+        #         email TEXT,
+        #         phone TEXT,
+        #         address TEXT,
+        #         city TEXT,
+        #         state TEXT,
+        #         zip TEXT,
+        #         payment_terms INTEGER DEFAULT 30,
+        #         ein TEXT,
+        #         notes TEXT,
+        #         total_billed REAL DEFAULT 0.0,
+        #         total_paid REAL DEFAULT 0.0,
+        #         amount_owed REAL DEFAULT 0.0,
+        #         active_bills INTEGER DEFAULT 0,
+        #         is_active INTEGER DEFAULT 1,
+        #         created_at TEXT DEFAULT (datetime('now')),
+        #         updated_at TEXT DEFAULT (datetime('now')),
+        #         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        #         FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL
+        #     )
+        # """)
 
-        # Bills
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS bills (
-                id TEXT PRIMARY KEY,
-                organization_id TEXT NOT NULL,
-                entity_id TEXT,
-                vendor_id TEXT NOT NULL,
-                bill_number TEXT,
-                bill_date TEXT NOT NULL,
-                due_date TEXT NOT NULL,
-                amount TEXT NOT NULL,
-                amount_paid TEXT DEFAULT '0.00',
-                amount_due TEXT NOT NULL,
-                status TEXT DEFAULT 'pending',
-                description TEXT,
-                category TEXT,
-                notes TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
-                FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE RESTRICT
-            )
-        """)
+        # Bills and Bill_payments tables now created by BillsEngine (app/bills/engine.py)
+        # Commented out to avoid conflict with the new AP system
+        # conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS bills (
+        #         id TEXT PRIMARY KEY,
+        #         organization_id TEXT NOT NULL,
+        #         entity_id TEXT,
+        #         vendor_id TEXT NOT NULL,
+        #         bill_number TEXT,
+        #         bill_date TEXT NOT NULL,
+        #         due_date TEXT NOT NULL,
+        #         amount TEXT NOT NULL,
+        #         amount_paid TEXT DEFAULT '0.00',
+        #         amount_due TEXT NOT NULL,
+        #         status TEXT DEFAULT 'pending',
+        #         description TEXT,
+        #         category TEXT,
+        #         notes TEXT,
+        #         created_at TEXT DEFAULT (datetime('now')),
+        #         updated_at TEXT DEFAULT (datetime('now')),
+        #         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        #         FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+        #         FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE RESTRICT
+        #     )
+        # """)
 
-        # Bill Payments
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS bill_payments (
-                id TEXT PRIMARY KEY,
-                organization_id TEXT NOT NULL,
-                entity_id TEXT,
-                vendor_id TEXT,
-                bill_id TEXT NOT NULL,
-                payment_date TEXT NOT NULL,
-                amount REAL NOT NULL,
-                payment_method TEXT,
-                reference_number TEXT,
-                notes TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
-                FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE RESTRICT,
-                FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
-            )
-        """)
+        # conn.execute("""
+        #     CREATE TABLE IF NOT EXISTS bill_payments (
+        #         id TEXT PRIMARY KEY,
+        #         organization_id TEXT NOT NULL,
+        #         entity_id TEXT,
+        #         vendor_id TEXT,
+        #         bill_id TEXT NOT NULL,
+        #         payment_date TEXT NOT NULL,
+        #         amount REAL NOT NULL,
+        #         payment_method TEXT,
+        #         reference_number TEXT,
+        #         notes TEXT,
+        #         created_at TEXT DEFAULT (datetime('now')),
+        #         FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+        #         FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+        #         FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE RESTRICT,
+        #         FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+        #     )
+        # """)
 
-        # Create indexes for vendors/bills
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_org ON vendors(organization_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_entity ON vendors(entity_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_org ON bills(organization_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_vendor ON bills(vendor_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_status ON bills(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_due_date ON bills(due_date)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_bill ON bill_payments(bill_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_vendor ON bill_payments(vendor_id)")
+        # Indexes for vendors/bills now created by BillsEngine
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_org ON vendors(organization_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_entity ON vendors(entity_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_org ON bills(organization_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_vendor ON bills(vendor_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_status ON bills(status)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_due_date ON bills(due_date)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_bill ON bill_payments(bill_id)")
+        # conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_vendor ON bill_payments(vendor_id)")
 
         conn.commit()
         print("Multi-tenancy database tables created")
