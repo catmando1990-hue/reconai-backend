@@ -16,6 +16,11 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = Path(os.getenv("DB_PATH", str(DATA_DIR / "reconai.db")))
 
 
+def get_db_connection():
+    """Get SQLite database connection"""
+    return sqlite3.connect(DB_PATH)
+
+
 def init_db() -> None:
     """Initialize database with multi-tenancy support"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -50,15 +55,30 @@ def init_db() -> None:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
+                user_id TEXT,
                 email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
+                password_hash TEXT,
                 first_name TEXT,
                 last_name TEXT,
+                full_name TEXT,
+                company_name TEXT,
                 phone TEXT,
                 avatar_url TEXT,
+                address TEXT,
+                city TEXT,
+                state TEXT,
+                zip_code TEXT,
+                country TEXT DEFAULT 'USA',
+                timezone TEXT DEFAULT 'America/New_York',
                 default_org_id TEXT,
                 is_active INTEGER DEFAULT 1,
                 email_verified INTEGER DEFAULT 0,
+                email_notifications INTEGER DEFAULT 1,
+                transaction_alerts INTEGER DEFAULT 1,
+                compliance_alerts INTEGER DEFAULT 1,
+                invoice_reminders INTEGER DEFAULT 1,
+                weekly_summary INTEGER DEFAULT 1,
+                monthly_report INTEGER DEFAULT 1,
                 last_login_at TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now')),
@@ -402,6 +422,94 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(organization_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id)")
+
+        # =================================================================
+        # VENDORS & BILLS (ACCOUNTS PAYABLE)
+        # =================================================================
+
+        # Vendors
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS vendors (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                name TEXT NOT NULL,
+                email TEXT,
+                phone TEXT,
+                address TEXT,
+                city TEXT,
+                state TEXT,
+                zip TEXT,
+                payment_terms INTEGER DEFAULT 30,
+                ein TEXT,
+                notes TEXT,
+                total_billed REAL DEFAULT 0.0,
+                total_paid REAL DEFAULT 0.0,
+                amount_owed REAL DEFAULT 0.0,
+                active_bills INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL
+            )
+        """)
+
+        # Bills
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bills (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                vendor_id TEXT NOT NULL,
+                bill_number TEXT,
+                bill_date TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                amount_paid TEXT DEFAULT '0.00',
+                amount_due TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                description TEXT,
+                category TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+                FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE RESTRICT
+            )
+        """)
+
+        # Bill Payments
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bill_payments (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                vendor_id TEXT,
+                bill_id TEXT NOT NULL,
+                payment_date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                payment_method TEXT,
+                reference_number TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+                FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE RESTRICT,
+                FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Create indexes for vendors/bills
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_org ON vendors(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_entity ON vendors(entity_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_org ON bills(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_vendor ON bills(vendor_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_status ON bills(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_due_date ON bills(due_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_bill ON bill_payments(bill_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_vendor ON bill_payments(vendor_id)")
 
         conn.commit()
         print("Multi-tenancy database tables created")
