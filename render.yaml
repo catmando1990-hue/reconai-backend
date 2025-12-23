@@ -1,0 +1,69 @@
+# Render deployment configuration
+# Deploy at: https://dashboard.render.com/
+
+services:
+  # Backend API Service
+  - type: web
+    name: reconai-backend
+    runtime: python
+    plan: starter  # $7/month - upgrade to standard ($25/month) for better performance
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    # Environment variables (set in Render dashboard)
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+
+      - key: PYTHON_VERSION
+        value: 3.11
+
+      # Database
+      - key: DATABASE_URL
+        value: sqlite:///data/reconai.db
+
+      # Clerk (set these in dashboard - don't commit secrets!)
+      - key: CLERK_SECRET_KEY
+        sync: false  # Set manually in dashboard
+
+      # Stripe (set in dashboard)
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+
+      # Supabase (set in dashboard)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # Plaid (set in dashboard)
+      - key: PLAID_CLIENT_ID
+        sync: false
+      - key: PLAID_SECRET
+        sync: false
+      - key: PLAID_ENV
+        value: sandbox  # Change to 'production' when ready
+
+      # CORS
+      - key: FRONTEND_URL
+        value: https://reconai-frontend.vercel.app
+
+      - key: CORS_ORIGINS
+        value: https://reconai-frontend.vercel.app,https://reconai-frontend.onrender.com
+
+    # Health check
+    healthCheckPath: /health
+
+    # Auto-deploy from GitHub
+    autoDeploy: true
+    branch: main  # or 'feature/clerk-auth' if deploying from that branch
+
+    # Persistent disk for SQLite database
+    disk:
+      name: reconai-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1  # 1GB free tier

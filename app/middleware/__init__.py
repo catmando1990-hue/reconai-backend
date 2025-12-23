@@ -1,27 +1,9 @@
 # app/middleware/__init__.py
+"""Security and performance middleware for ReconAI"""
 
-"""
-Middleware package for ReconAI
-"""
-
-from .rbac import (
-    rbac,
-    RBACMiddleware,
-    require_permission,
-    require_role,
-    require_feature,
-    check_usage_limit,
-    get_org_context,
-    require_org_access
-)
+from .rate_limit import RateLimitMiddleware, ProductionRateLimitMiddleware
 
 __all__ = [
-    "rbac",
-    "RBACMiddleware",
-    "require_permission",
-    "require_role",
-    "require_feature",
-    "check_usage_limit",
-    "get_org_context",
-    "require_org_access"
+    "RateLimitMiddleware",
+    "ProductionRateLimitMiddleware"
 ]

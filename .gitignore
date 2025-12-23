@@ -25,3 +25,13 @@ data/reconai.db
 .env
 .env.local
 .env.*.local
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
