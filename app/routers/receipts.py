@@ -258,36 +258,50 @@ async def upload_receipt(
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
-    Upload a receipt file
+    Upload a receipt file with AES-256 encryption
 
-    Saves the file and creates a receipt record.
+    Files are encrypted at rest using AES-256-GCM before being stored.
     """
     try:
         from app.db import UPLOADS_DIR
+        from app.utils.encryption import get_encryption_service
+
+        # Get encryption service
+        encryption_service = get_encryption_service()
 
         # Create organization uploads directory
         org_uploads_dir = UPLOADS_DIR / (org_id or "default")
         org_uploads_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate unique filename
+        # Generate unique filename with .enc extension
         file_ext = Path(file.filename).suffix if file.filename else ".jpg"
         unique_filename = f"{uuid.uuid4()}{file_ext}"
-        file_path = org_uploads_dir / unique_filename
+        encrypted_filename = f"{unique_filename}.enc"
+        temp_file_path = org_uploads_dir / unique_filename
+        encrypted_file_path = org_uploads_dir / encrypted_filename
 
-        # Save file
+        # Read uploaded file content
         content = await file.read()
-        with open(file_path, "wb") as f:
+
+        # Save temporarily (for encryption)
+        with open(temp_file_path, "wb") as f:
             f.write(content)
+
+        # Encrypt the file using AES-256-GCM
+        encryption_service.encrypt_file(str(temp_file_path), str(encrypted_file_path))
+
+        # Delete unencrypted temporary file
+        temp_file_path.unlink()
 
         # Create receipt record
         receipt_data = ReceiptCreate(
             file_name=file.filename or unique_filename,
-            file_url=f"/uploads/{org_id or 'default'}/{unique_filename}",
+            file_url=f"/uploads/{org_id or 'default'}/{encrypted_filename}",
             vendor_name=None,
             amount=None,
             date=datetime.now().date().isoformat(),
             category=None,
-            description=f"Uploaded receipt: {file.filename}"
+            description=f"Uploaded receipt: {file.filename} (encrypted with AES-256)"
         )
 
         receipt = await create_receipt(
@@ -298,12 +312,19 @@ async def upload_receipt(
         )
 
         return {
-            "message": "Receipt uploaded successfully",
+            "message": "Receipt uploaded and encrypted successfully (AES-256)",
             "receipt": receipt,
-            "file_path": str(file_path)
+            "encrypted": True,
+            "encryption": "AES-256-GCM"
         }
 
     except Exception as e:
+        # Clean up any temporary files on error
+        if 'temp_file_path' in locals() and temp_file_path.exists():
+            temp_file_path.unlink()
+        if 'encrypted_file_path' in locals() and encrypted_file_path.exists():
+            encrypted_file_path.unlink()
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error uploading receipt: {str(e)}"
@@ -430,14 +451,77 @@ async def update_receipt(
         )
 
 
+@router.get("/{receipt_id}/download")
+async def download_receipt(
+    receipt_id: str,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """
+    Download and decrypt a receipt file
+
+    Decrypts the AES-256 encrypted file on the fly for download.
+    """
+    try:
+        from app.db import get_db_connection, UPLOADS_DIR
+        from app.utils.encryption import get_encryption_service
+        from fastapi.responses import FileResponse
+        import tempfile
+
+        # Get receipt record
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_name, file_url FROM receipts WHERE id = ?", (receipt_id,))
+        row = cursor.fetchone()
+
+        if not row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Receipt {receipt_id} not found"
+            )
+
+        original_filename = row[0]
+        file_url = row[1]
+
+        # Get encrypted file path
+        encrypted_path = UPLOADS_DIR / file_url.lstrip("/uploads/")
+
+        if not encrypted_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Receipt file not found"
+            )
+
+        # Decrypt to temporary file
+        encryption_service = get_encryption_service()
+        temp_dir = Path(tempfile.gettempdir())
+        decrypted_path = temp_dir / f"receipt_{receipt_id}_{original_filename}"
+
+        encryption_service.decrypt_file(str(encrypted_path), str(decrypted_path))
+
+        # Return decrypted file
+        return FileResponse(
+            path=str(decrypted_path),
+            filename=original_filename,
+            media_type="application/octet-stream"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error downloading receipt: {str(e)}"
+        )
+
+
 @router.delete("/{receipt_id}")
 async def delete_receipt(
     receipt_id: str,
     current_user_id: str = Depends(get_current_user_id)
 ):
-    """Delete a receipt"""
+    """Delete a receipt and its encrypted file"""
     try:
-        from app.db import get_db_connection
+        from app.db import get_db_connection, UPLOADS_DIR
 
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -455,14 +539,13 @@ async def delete_receipt(
                 detail=f"Receipt {receipt_id} not found"
             )
 
-        # Optionally delete the actual file (commented out for safety)
-        # if row and row[0]:
-        #     from app.db import UPLOADS_DIR
-        #     file_path = UPLOADS_DIR / row[0].lstrip("/uploads/")
-        #     if file_path.exists():
-        #         file_path.unlink()
+        # Delete the encrypted file
+        if row and row[0]:
+            file_path = UPLOADS_DIR / row[0].lstrip("/uploads/")
+            if file_path.exists():
+                file_path.unlink()
 
-        return {"message": "Receipt deleted successfully"}
+        return {"message": "Receipt and encrypted file deleted successfully"}
 
     except HTTPException:
         raise
