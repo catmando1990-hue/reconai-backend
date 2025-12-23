@@ -1,9 +1,12 @@
 # app/main.py
 from __future__ import annotations
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.concurrency import run_in_threadpool
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 # Import all routers that exist
 from app.routers.files import router as files_router
@@ -54,6 +57,40 @@ def get_allowed_origins() -> list[str]:
     ]
 
 
+# ============================================================================
+# SECURITY HEADERS MIDDLEWARE
+# ============================================================================
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses"""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        # Prevent MIME type sniffing
+        response.headers["X-Content-Type-Options"] = "nosniff"
+
+        # Prevent clickjacking attacks
+        response.headers["X-Frame-Options"] = "DENY"
+
+        # Enable XSS protection (legacy browsers)
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+
+        # Force HTTPS in production (HSTS)
+        if os.getenv("ENVIRONMENT") == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+        # Content Security Policy
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+
+        # Referrer policy
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        # Permissions policy
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+
+        return response
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="ReconAI Backend",
@@ -62,8 +99,28 @@ app = FastAPI(
 )
 
 # ============================================================================
-# CORS MIDDLEWARE - MUST BE CONFIGURED BEFORE ROUTES
+# MIDDLEWARE - ORDER MATTERS!
 # ============================================================================
+
+# 1. Rate limiting (prevent abuse)
+from app.middleware import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
+
+# 2. Security headers (applied to all responses)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 3. Trusted host (prevent host header attacks)
+if os.getenv("ENVIRONMENT") == "production":
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[
+            "reconai-backend.onrender.com",
+            "api.reconai.com",
+            "*.vercel.app"
+        ]
+    )
+
+# 4. CORS (must be after security headers)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),

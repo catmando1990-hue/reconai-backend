@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ..services.organization_service import OrganizationService
 from ..models_multitenancy import Entity, EntityType
-from ..middleware import require_permission, require_feature, get_org_context
+# from ..middleware import require_permission, require_feature, get_org_context  # TODO: Implement these
 from ..db import DB_PATH
 from .auth import get_current_user_id
 
