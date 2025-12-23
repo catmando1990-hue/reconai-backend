@@ -43,6 +43,7 @@ from app.routers.newsletter import router as newsletter_router
 from app.routers.customers import router as customers_router
 from app.routers.invoices import router as invoices_router
 from app.routers.reports import router as reports_router
+from app.routers.invoicing import router as invoicing_router
 from app.routers.stripe_webhooks import router as stripe_webhooks_router
 from app.routers.compliance import router as compliance_router
 from app.routers import claude
@@ -143,6 +144,7 @@ app.include_router(contact_router)
 app.include_router(newsletter_router)
 app.include_router(customers_router)
 app.include_router(invoices_router)
+app.include_router(invoicing_router)
 app.include_router(reports_router)
 app.include_router(stripe_webhooks_router)
 app.include_router(compliance_router)
@@ -164,22 +166,31 @@ app.include_router(health_router)
 async def startup_event():
     from app.db import init_db
     from app.bookkeeping.engine import BookkeeperEngine
+    from app.invoicing.engine import InvoicingEngine
+    from app.routers.invoicing import set_invoicing_engine
     from app.db import DB_PATH
 
-    print("ReconAI Backend starting up...")
-    print("Initializing database...")
+    print("🚀 ReconAI Backend starting up...")
+    print("📊 Initializing database...")
     await run_in_threadpool(init_db)
-    print("Database ready")
+    print("✅ Database ready")
 
-    print("Initializing bookkeeping engine...")
-    await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
-    print("Bookkeeping engine ready")
+    print("📒 Initializing bookkeeping engine...")
+    bookkeeper = await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
+    print("✅ Bookkeeping engine ready")
 
-    print(f"CORS enabled for: {get_allowed_origins()}")
-    print(f"CORS regex: ^https://.*\.vercel\.app$")
-    print("Classify endpoint mounted at: /classify-transactions")
+    print("💰 Initializing invoicing engine...")
+    invoicing = await run_in_threadpool(lambda: InvoicingEngine(DB_PATH, bookkeeper_engine=bookkeeper))
+    set_invoicing_engine(invoicing)
+    print("✅ Invoicing engine ready")
+
+    print(f"📡 CORS enabled for: {get_allowed_origins()}")
+    print(f"📡 CORS regex: ^https://.*\.vercel\.app$")
+    print("🔗 Classify endpoint mounted at: /classify-transactions")
+    print("🔗 Bookkeeping API mounted at: /api/bookkeeping")
+    print("🔗 Invoicing API mounted at: /api/invoicing")
     set_startup_time()
-    print("Sentry initialized" if os.getenv("SENTRY_DSN") else "Sentry not configured")
+    print("🔍 Sentry initialized" if os.getenv("SENTRY_DSN") else "⚠️  Sentry not configured")
 
 
 @app.on_event("shutdown")
