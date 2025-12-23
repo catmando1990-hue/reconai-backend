@@ -646,6 +646,6 @@ class LenderPackager:
                 with open(f"{output_dir}/{filename}.json", 'w') as f:
                     json.dump(doc_data, f, indent=2)
         
-        print(f"✅ Package exported to {output_dir}")
+        print(f"Package exported to {output_dir}")
         print(f"   Lender: {self.profile.lender_name}")
         print(f"   Documents: {len(package.get('documents', {}))}")

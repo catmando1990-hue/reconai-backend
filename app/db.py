@@ -17,12 +17,205 @@ DB_PATH = Path(os.getenv("DB_PATH", str(DATA_DIR / "reconai.db")))
 
 
 def init_db() -> None:
+    """Initialize database with multi-tenancy support"""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(DB_PATH) as conn:
+        # =================================================================
+        # MULTI-TENANCY CORE TABLES
+        # =================================================================
+
+        # Organizations (Tenants)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS organizations (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                slug TEXT UNIQUE NOT NULL,
+                tier TEXT NOT NULL DEFAULT 'individual',
+                industry TEXT,
+                subscription_status TEXT DEFAULT 'trial',
+                trial_ends_at TEXT,
+                subscription_ends_at TEXT,
+                stripe_customer_id TEXT UNIQUE,
+                stripe_subscription_id TEXT,
+                features TEXT DEFAULT '{}',
+                branding TEXT DEFAULT '{}',
+                owner_user_id TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Users
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
+                phone TEXT,
+                avatar_url TEXT,
+                default_org_id TEXT,
+                is_active INTEGER DEFAULT 1,
+                email_verified INTEGER DEFAULT 0,
+                last_login_at TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (default_org_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # Organization Members
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS organization_members (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                permissions TEXT DEFAULT '{}',
+                invited_by TEXT,
+                invited_at TEXT,
+                joined_at TEXT DEFAULT (datetime('now')),
+                is_active INTEGER DEFAULT 1,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (invited_by) REFERENCES users(id),
+                UNIQUE(organization_id, user_id)
+            )
+        """)
+
+        # Entities
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS entities (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                legal_name TEXT,
+                ein TEXT,
+                entity_type TEXT,
+                industry TEXT,
+                address_line1 TEXT,
+                address_line2 TEXT,
+                city TEXT,
+                state TEXT,
+                zip TEXT,
+                country TEXT DEFAULT 'US',
+                phone TEXT,
+                email TEXT,
+                website TEXT,
+                fiscal_year_end TEXT,
+                default_currency TEXT DEFAULT 'USD',
+                timezone TEXT DEFAULT 'America/New_York',
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                UNIQUE(organization_id, name)
+            )
+        """)
+
+        # Dimensions
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS dimensions (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                dimension_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                code TEXT,
+                description TEXT,
+                parent_id TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+                FOREIGN KEY (parent_id) REFERENCES dimensions(id),
+                UNIQUE(organization_id, entity_id, dimension_type, name)
+            )
+        """)
+
+        # Custom Fields
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS custom_fields (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                field_type TEXT NOT NULL,
+                field_options TEXT,
+                is_required INTEGER DEFAULT 0,
+                default_value TEXT,
+                display_order INTEGER DEFAULT 0,
+                help_text TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                UNIQUE(organization_id, entity_type, field_name)
+            )
+        """)
+
+        # Custom Field Values
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS custom_field_values (
+                id TEXT PRIMARY KEY,
+                custom_field_id TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                value TEXT,
+                FOREIGN KEY (custom_field_id) REFERENCES custom_fields(id) ON DELETE CASCADE,
+                UNIQUE(custom_field_id, record_id)
+            )
+        """)
+
+        # Approval Rules
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS approval_rules (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                transaction_type TEXT NOT NULL,
+                condition TEXT,
+                requires_approval_from TEXT NOT NULL,
+                approval_order INTEGER DEFAULT 1,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Approvals
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS approvals (
+                id TEXT PRIMARY KEY,
+                transaction_id TEXT NOT NULL,
+                transaction_type TEXT NOT NULL,
+                required_approver_id TEXT NOT NULL,
+                approved_by TEXT,
+                approved_at TEXT,
+                status TEXT DEFAULT 'pending',
+                notes TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (required_approver_id) REFERENCES users(id),
+                FOREIGN KEY (approved_by) REFERENCES users(id)
+            )
+        """)
+
+        # Create indexes
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_slug ON organizations(slug)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orgs_tier ON organizations(tier)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_members_org ON organization_members(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_members_user ON organization_members(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_org ON entities(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dimensions_org ON dimensions(organization_id)")
+
+        # =================================================================
+        # LEGACY TABLES (updated for multi-tenancy)
+        # =================================================================
+
         # tokens
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS user_tokens (
                 user_id TEXT PRIMARY KEY,
                 access_token TEXT NOT NULL,
@@ -30,34 +223,28 @@ def init_db() -> None:
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
             )
-            """
-        )
+        """)
 
         # merchant feedback
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS merchant_feedback (
                 merchant_key TEXT PRIMARY KEY,
                 correct_label TEXT NOT NULL,
                 updated_at TEXT DEFAULT (datetime('now'))
             )
-            """
-        )
+        """)
 
         # tx feedback
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS transaction_feedback (
                 tx_id TEXT PRIMARY KEY,
                 correct_label TEXT NOT NULL,
                 updated_at TEXT DEFAULT (datetime('now'))
             )
-            """
-        )
+        """)
 
         # uploads metadata
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS uploads (
                 id TEXT PRIMARY KEY,
                 filename TEXT NOT NULL,
@@ -66,7 +253,155 @@ def init_db() -> None:
                 size_bytes INTEGER,
                 created_at TEXT DEFAULT (datetime('now'))
             )
-            """
-        )
+        """)
+
+        # Contact form submissions
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS contact_submissions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                subject TEXT,
+                message TEXT NOT NULL,
+                phone TEXT,
+                company TEXT,
+                source TEXT DEFAULT 'website',
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Newsletter subscribers
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                name TEXT,
+                source TEXT DEFAULT 'website',
+                list_type TEXT DEFAULT 'general',
+                subscribed_at TEXT DEFAULT (datetime('now')),
+                unsubscribed_at TEXT,
+                resubscribed_at TEXT,
+                UNIQUE(email, list_type)
+            )
+        """)
+
+        # Create indexes for marketing tables
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contact_email ON contact_submissions(email)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contact_created ON contact_submissions(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_email ON newsletter_subscribers(email)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_newsletter_active ON newsletter_subscribers(unsubscribed_at)")
+
+        # =================================================================
+        # INVOICING & CUSTOMERS
+        # =================================================================
+
+        # Customers
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS customers (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                name TEXT NOT NULL,
+                email TEXT,
+                phone TEXT,
+                address_line1 TEXT,
+                address_line2 TEXT,
+                city TEXT,
+                state TEXT,
+                zip TEXT,
+                country TEXT DEFAULT 'US',
+                company_name TEXT,
+                tax_id TEXT,
+                payment_terms INTEGER DEFAULT 30,
+                outstanding_balance REAL DEFAULT 0.0,
+                is_active INTEGER DEFAULT 1,
+                notes TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL
+            )
+        """)
+
+        # Invoices
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoices (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                customer_id TEXT NOT NULL,
+                invoice_number TEXT NOT NULL,
+                issue_date TEXT NOT NULL,
+                due_date TEXT NOT NULL,
+                status TEXT DEFAULT 'draft',
+                subtotal REAL NOT NULL DEFAULT 0.0,
+                tax_rate REAL DEFAULT 0.0,
+                tax_amount REAL DEFAULT 0.0,
+                discount_amount REAL DEFAULT 0.0,
+                total_amount REAL NOT NULL DEFAULT 0.0,
+                amount_paid REAL DEFAULT 0.0,
+                currency TEXT DEFAULT 'USD',
+                notes TEXT,
+                terms TEXT,
+                footer TEXT,
+                sent_at TEXT,
+                paid_at TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+                FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT,
+                UNIQUE(organization_id, invoice_number)
+            )
+        """)
+
+        # Invoice Line Items
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS invoice_items (
+                id TEXT PRIMARY KEY,
+                invoice_id TEXT NOT NULL,
+                description TEXT NOT NULL,
+                quantity REAL NOT NULL DEFAULT 1,
+                unit_price REAL NOT NULL DEFAULT 0.0,
+                amount REAL NOT NULL DEFAULT 0.0,
+                account_id TEXT,
+                sort_order INTEGER DEFAULT 0,
+                FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Payments
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                customer_id TEXT NOT NULL,
+                invoice_id TEXT,
+                payment_date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                payment_method TEXT,
+                reference_number TEXT,
+                notes TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+                FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE RESTRICT,
+                FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE SET NULL
+            )
+        """)
+
+        # Create indexes for invoicing tables
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_org ON customers(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_entity ON customers(entity_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_org ON invoices(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoices_due_date ON invoices(due_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id)")
 
         conn.commit()
+        print("Multi-tenancy database tables created")

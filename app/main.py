@@ -15,6 +15,17 @@ from app.routers.tax import router as tax_router
 from app.routers.credit import router as credit_router
 from app.routers.feedback import router as feedback_router
 from app.routers.plaid import router as plaid_router
+from app.routers.bookkeeping import router as bookkeeping_router
+from app.routers.auth import router as auth_router
+from app.routers.organizations import router as organizations_router
+from app.routers.entities import router as entities_router
+from app.routers.contact import router as contact_router
+from app.routers.newsletter import router as newsletter_router
+from app.routers.customers import router as customers_router
+from app.routers.invoices import router as invoices_router
+from app.routers.reports import router as reports_router
+from app.routers.stripe_webhooks import router as stripe_webhooks_router
+from app.routers.compliance import router as compliance_router
 from app.routers import claude
 
 
@@ -32,8 +43,10 @@ def get_allowed_origins() -> list[str]:
     return [
         "http://localhost:5173",      # Vite default
         "http://127.0.0.1:5173",
-        "http://localhost:3000",      # Alternative React port
+        "http://localhost:3000",      # Next.js default port
         "http://127.0.0.1:3000",
+        "http://localhost:3001",      # Next.js alternate port (YOUR FRONTEND)
+        "http://127.0.0.1:3001",
         "https://reconai-frontend.onrender.com",  # Production (Render)
         "https://reconai-frontend.vercel.app",     # Production (Vercel)
     ]
@@ -102,6 +115,16 @@ app.add_api_route(
 # INCLUDE ALL ROUTERS (WITH THEIR ORIGINAL PREFIXES)
 # ============================================================================
 
+app.include_router(auth_router)
+app.include_router(organizations_router)
+app.include_router(entities_router)
+app.include_router(contact_router)
+app.include_router(newsletter_router)
+app.include_router(customers_router)
+app.include_router(invoices_router)
+app.include_router(reports_router)
+app.include_router(stripe_webhooks_router)
+app.include_router(compliance_router)
 app.include_router(files_router)
 app.include_router(exports_router)
 app.include_router(reconai_router)
@@ -111,6 +134,7 @@ app.include_router(tax_router)
 app.include_router(credit_router)
 app.include_router(feedback_router)
 app.include_router(plaid_router)
+app.include_router(bookkeeping_router)
 app.include_router(claude.router)
 
 
@@ -121,17 +145,36 @@ app.include_router(claude.router)
 @app.on_event("startup")
 async def startup_event():
     from app.db import init_db
-    
-    print("🚀 ReconAI Backend starting up...")
-    print("📊 Initializing database...")
+    from app.bookkeeping.engine import BookkeeperEngine
+    from app.db import DB_PATH
+
+    print("ReconAI Backend starting up...")
+    print("Initializing database...")
     # Run synchronous DB init in thread pool to avoid blocking event loop
     await run_in_threadpool(init_db)
-    print("✅ Database ready")
-    print(f"📡 CORS enabled for: {get_allowed_origins()}")
-    print(f"📡 CORS regex: ^https://.*\.vercel\.app$")
-    print("🔗 Classify endpoint mounted at: /classify-transactions")
+    print("Database ready")
+
+    # Initialize bookkeeping engine
+    print("Initializing bookkeeping engine...")
+    await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
+    print("Bookkeeping engine ready")
+
+    print(f"CORS enabled for: {get_allowed_origins()}")
+    print(f"CORS regex: ^https://.*\.vercel\.app$")
+    print("Classify endpoint mounted at: /classify-transactions")
+    print("Auth API mounted at: /api/auth")
+    print("Organizations API mounted at: /api/organizations")
+    print("Entities API mounted at: /api/entities")
+    print("Contact API mounted at: /api/contact")
+    print("Newsletter API mounted at: /api/newsletter")
+    print("Customers API mounted at: /api/customers")
+    print("Invoices API mounted at: /api/invoices")
+    print("Reports API mounted at: /api/reports")
+    print("Stripe Webhooks mounted at: /api/webhooks/stripe")
+    print("Compliance API mounted at: /api/compliance")
+    print("Bookkeeping API mounted at: /api/bookkeeping")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    print("👋 ReconAI Backend shutting down...")
+    print("ReconAI Backend shutting down...")
