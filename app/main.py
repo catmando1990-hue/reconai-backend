@@ -34,6 +34,8 @@ from app.routers.bookkeeping import router as bookkeeping_router
 from app.routers.auth import router as auth_router
 from app.routers.users import router as users_router
 from app.routers.vendors import router as vendors_router
+from app.routers.bills import router as bills_router
+from app.routers.receipts import router as receipts_router
 from app.routers.organizations import router as organizations_router
 from app.routers.entities import router as entities_router
 from app.routers.contact import router as contact_router
@@ -133,6 +135,8 @@ app.add_api_route(
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(vendors_router)
+app.include_router(bills_router)
+app.include_router(receipts_router)
 app.include_router(organizations_router)
 app.include_router(entities_router)
 app.include_router(contact_router)
