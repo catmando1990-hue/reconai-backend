@@ -130,10 +130,24 @@ class BillsEngine:
                 )
             """)
 
+            # Migration: Add missing columns to existing tables
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(vendors)")
+            vendor_columns = [col[1] for col in cursor.fetchall()]
+            
+            if "requires_1099" not in vendor_columns:
+                conn.execute("ALTER TABLE vendors ADD COLUMN requires_1099 INTEGER DEFAULT 0")
+            
+            if "ein" not in vendor_columns:
+                conn.execute("ALTER TABLE vendors ADD COLUMN ein TEXT")
+            
             # Create indexes for performance
             conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_org ON vendors(organization_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_active ON vendors(is_active)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_1099 ON vendors(requires_1099)")
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_vendors_1099 ON vendors(requires_1099)")
+            except Exception:
+                pass  # Column may not exist yet
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_org ON bills(organization_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_vendor ON bills(vendor_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bills_status ON bills(status)")
