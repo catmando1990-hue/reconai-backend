@@ -66,6 +66,8 @@ def get_allowed_origins() -> list[str]:
         "http://127.0.0.1:3001",
         "https://reconai-frontend.onrender.com",
         "https://reconai-frontend.vercel.app",
+        "https://reconaitechnology.com",
+        "https://www.reconaitechnology.com",
     ]
 
 
