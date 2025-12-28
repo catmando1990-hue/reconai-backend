@@ -52,7 +52,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-JUf3MUauU5c9PSyGzvkF8z2YZtBAduzJ-rGdFdnqECK6GdlPl
 ```bash
 ENVIRONMENT=production
 FRONTEND_URL=https://reconai-frontend.vercel.app
-CORS_ORIGINS=https://reconai-frontend.vercel.app
+CORS_ORIGINS=https://reconai-frontend.vercel.app,https://reconaitechnology.com,https://www.reconaitechnology.com
 ```
 
 ### 7. Database Path ✅
@@ -127,7 +127,7 @@ DB_PATH=/opt/render/project/src/data/reconai.db
 
 # CORS
 FRONTEND_URL=https://reconai-frontend.vercel.app
-CORS_ORIGINS=https://reconai-frontend.vercel.app
+CORS_ORIGINS=https://reconai-frontend.vercel.app,https://reconaitechnology.com,https://www.reconaitechnology.com
 
 # Monitoring
 SENTRY_DSN=https://4ae03465676b18890bdbb86fb6863124@o4510582236839936.ingest.us.sentry.io/4510583036772352
