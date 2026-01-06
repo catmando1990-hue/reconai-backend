@@ -231,6 +231,46 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dimensions_org ON dimensions(organization_id)")
 
         # =================================================================
+        # MVP TABLES (Phases 010–012)
+        # =================================================================
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mvp_uploads (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                filename TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mvp_transactions (
+                id TEXT PRIMARY KEY,
+                upload_id TEXT NOT NULL,
+                organization_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                tx_date TEXT,
+                amount REAL NOT NULL,
+                description TEXT NOT NULL,
+                merchant TEXT,
+                original_category TEXT,
+                classification TEXT,
+                reason TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (upload_id) REFERENCES mvp_uploads(id) ON DELETE CASCADE,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_mvp_tx_org ON mvp_transactions(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_mvp_tx_upload ON mvp_transactions(upload_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_mvp_uploads_org ON mvp_uploads(organization_id)")
+
+        # =================================================================
         # LEGACY TABLES (updated for multi-tenancy)
         # =================================================================
 
