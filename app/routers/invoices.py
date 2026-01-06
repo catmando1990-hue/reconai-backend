@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from ..db import DB_PATH
-from .auth import get_current_user_id
+from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/invoices", tags=["Invoices"])
 
@@ -251,8 +251,8 @@ def get_invoice_with_items(invoice_id: str, org_id: str) -> Optional[InvoiceResp
 
 @router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 async def create_invoice(
-    org_id: str,
     request: CreateInvoiceRequest,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
@@ -338,7 +338,7 @@ async def create_invoice(
 
 @router.get("/", response_model=List[InvoiceResponse])
 async def list_invoices(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     customer_id: Optional[str] = None,
     status: Optional[str] = None,
@@ -449,7 +449,7 @@ async def list_invoices(
 @router.get("/{invoice_id}", response_model=InvoiceResponse)
 async def get_invoice(
     invoice_id: str,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """Get invoice by ID"""
@@ -467,8 +467,8 @@ async def get_invoice(
 @router.patch("/{invoice_id}", response_model=InvoiceResponse)
 async def update_invoice(
     invoice_id: str,
-    org_id: str,
     request: UpdateInvoiceRequest,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
@@ -566,8 +566,8 @@ async def update_invoice(
 @router.post("/{invoice_id}/payments", response_model=PaymentResponse, status_code=status.HTTP_201_CREATED)
 async def record_payment(
     invoice_id: str,
-    org_id: str,
     request: RecordPaymentRequest,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
@@ -673,7 +673,7 @@ async def record_payment(
 @router.get("/{invoice_id}/payments", response_model=List[PaymentResponse])
 async def list_payments(
     invoice_id: str,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """List all payments for invoice"""
@@ -724,7 +724,7 @@ async def list_payments(
 @router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_invoice(
     invoice_id: str,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """

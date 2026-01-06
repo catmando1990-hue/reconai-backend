@@ -17,14 +17,7 @@ from app.invoicing import (
     ARAgingReport
 )
 
-try:
-    from .auth import get_current_user_id, get_current_organization_id
-except ImportError:
-    def get_current_user_id():
-        return "system"
-
-    def get_current_organization_id():
-        return "default-org"
+from app.auth_context import get_current_organization_id, get_current_user_id
 
 
 router = APIRouter(prefix="/api/invoicing", tags=["invoicing"])

@@ -91,7 +91,8 @@ app = FastAPI(
     description="Financial Intelligence API for ReconAI"
 )
 
-from app.middleware import RateLimitMiddleware
+from app.middleware import AuthContextMiddleware, RateLimitMiddleware
+app.add_middleware(AuthContextMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 

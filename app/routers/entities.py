@@ -14,7 +14,7 @@ from ..services.organization_service import OrganizationService
 from ..models_multitenancy import Entity, EntityType
 # from ..middleware import require_permission, require_feature, get_org_context  # TODO: Implement these
 from ..db import DB_PATH
-from .auth import get_current_user_id
+from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/entities", tags=["Entities"])
 
@@ -86,7 +86,7 @@ def get_service() -> OrganizationService:
 @router.post("/", response_model=EntityResponse, status_code=status.HTTP_201_CREATED)
 async def create_entity(
     request: CreateEntityRequest,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_service)
 ):
@@ -160,7 +160,7 @@ async def create_entity(
 
 @router.get("/", response_model=List[EntityResponse])
 async def list_entities(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_service)
 ):
@@ -194,7 +194,7 @@ async def list_entities(
 @router.get("/{entity_id}", response_model=EntityResponse)
 async def get_entity(
     entity_id: str,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_service)
 ):
@@ -240,8 +240,8 @@ async def get_entity(
 @router.patch("/{entity_id}", response_model=EntityResponse)
 async def update_entity(
     entity_id: str,
-    org_id: str,
     request: UpdateEntityRequest,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_service)
 ):
@@ -321,7 +321,7 @@ async def update_entity(
 @router.delete("/{entity_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_entity(
     entity_id: str,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id),
     service: OrganizationService = Depends(get_service)
 ):

@@ -5,12 +5,7 @@ from app.reconai_core.compliance_monitor import ComplianceMonitor
 import pandas as pd
 from datetime import datetime
 
-try:
-    from .auth import get_current_user_id
-except ImportError:
-    # Fallback if auth not available
-    def get_current_user_id():
-        return "system"
+from app.auth_context import get_current_user_id
 
 router = APIRouter(prefix="/api/compliance", tags=["compliance"])
 

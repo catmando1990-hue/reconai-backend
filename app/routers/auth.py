@@ -13,6 +13,8 @@ import jwt
 from jwt import PyJWKClient
 from functools import lru_cache
 
+from app.auth_context import get_current_context as get_current_context_dep
+
 from ..services.organization_service import OrganizationService
 from ..services.email_service import email_service, EmailRecipient
 from ..models_multitenancy import User, SubscriptionTier, Industry
@@ -199,17 +201,14 @@ async def get_current_user_id(
     return current_user.id
 
 async def get_current_organization_id(
-    authorization: Optional[str] = Header(None)
+    ctx: dict = Depends(get_current_context_dep)
 ) -> str:
     """
     Dependency: Get current organization ID from JWT or header
 
-    For now, returns a default organization ID.
-    TODO: Extract from JWT or require X-Organization-ID header
+    Org is derived from trusted auth context (JWT + DB), never from client input.
     """
-    # Temporary: return a default organization ID
-    # In production, this should be extracted from the JWT or require an X-Organization-ID header
-    return "default-org-id"
+    return ctx["org_id"]
 
 # =========================================================================
 # AUTHENTICATION ENDPOINTS

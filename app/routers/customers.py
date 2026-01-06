@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 
 from ..db import DB_PATH
-from .auth import get_current_user_id
+from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/customers", tags=["Customers"])
 
@@ -90,9 +90,9 @@ class CustomerResponse(BaseModel):
 
 @router.post("/", response_model=CustomerResponse, status_code=status.HTTP_201_CREATED)
 async def create_customer(
-    org_id: str,
     request: CreateCustomerRequest,
     entity_id: Optional[str] = None,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
@@ -134,7 +134,7 @@ async def create_customer(
 
 @router.get("/", response_model=List[CustomerResponse])
 async def list_customers(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     active_only: bool = Query(True),
     current_user_id: str = Depends(get_current_user_id)
@@ -211,7 +211,7 @@ async def list_customers(
 @router.get("/{customer_id}", response_model=CustomerResponse)
 async def get_customer(
     customer_id: str,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """Get customer by ID"""
@@ -276,8 +276,8 @@ async def get_customer(
 @router.patch("/{customer_id}", response_model=CustomerResponse)
 async def update_customer(
     customer_id: str,
-    org_id: str,
     request: UpdateCustomerRequest,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
@@ -330,7 +330,7 @@ async def update_customer(
 @router.delete("/{customer_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_customer(
     customer_id: str,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     current_user_id: str = Depends(get_current_user_id)
 ):
     """

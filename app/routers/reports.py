@@ -13,7 +13,7 @@ from datetime import datetime, date
 from decimal import Decimal
 
 from ..db import DB_PATH
-from .auth import get_current_user_id
+from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/reports", tags=["Reports"])
 
@@ -174,7 +174,7 @@ def get_account_balances(
 
 @router.get("/income-statement", response_model=IncomeStatementResponse)
 async def get_income_statement(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
     entity_id: Optional[str] = None,
@@ -231,7 +231,7 @@ async def get_income_statement(
 
 @router.get("/balance-sheet", response_model=BalanceSheetResponse)
 async def get_balance_sheet(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     as_of_date: str = Query(..., description="As of date (YYYY-MM-DD)"),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
@@ -291,7 +291,7 @@ async def get_balance_sheet(
 
 @router.get("/trial-balance", response_model=TrialBalanceResponse)
 async def get_trial_balance(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     as_of_date: str = Query(..., description="As of date (YYYY-MM-DD)"),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
@@ -337,7 +337,7 @@ async def get_trial_balance(
 
 @router.get("/cash-flow", response_model=CashFlowStatementResponse)
 async def get_cash_flow_statement(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
     entity_id: Optional[str] = None,
@@ -437,7 +437,7 @@ async def get_cash_flow_statement(
 
 @router.get("/summary")
 async def get_financial_summary(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     as_of_date: str = Query(..., description="As of date (YYYY-MM-DD)"),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
@@ -505,7 +505,7 @@ async def get_financial_summary(
 
 @router.post("/generate")
 async def generate_report(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     report_type: str = Query(..., description="Type of report: income-statement, balance-sheet, trial-balance, cash-flow, summary"),
     start_date: Optional[str] = Query(None, description="Start date (for income statement, cash flow)"),
     end_date: Optional[str] = Query(None, description="End date (for income statement, cash flow)"),

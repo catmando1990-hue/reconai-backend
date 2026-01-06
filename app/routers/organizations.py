@@ -94,8 +94,7 @@ def get_org_service() -> OrganizationService:
     """Dependency: Get organization service instance"""
     return OrganizationService(DB_PATH)
 
-# Import authentication dependencies from auth router
-from .auth import get_current_user_id
+from app.auth_context import get_current_user_id
 
 # =========================================================================
 # ORGANIZATION ENDPOINTS

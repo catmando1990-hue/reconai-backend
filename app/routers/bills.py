@@ -7,11 +7,7 @@ import sqlite3
 from datetime import datetime
 import uuid
 
-try:
-    from .auth import get_current_user_id
-except ImportError:
-    def get_current_user_id():
-        return "system"
+from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/bills", tags=["bills"])
 
@@ -85,7 +81,7 @@ class BillPaymentResponse(BaseModel):
 
 @router.get("/", response_model=List[BillResponse])
 async def get_bills(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     status: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
@@ -165,7 +161,7 @@ async def get_bills(
 @router.post("/", response_model=BillResponse)
 async def create_bill(
     bill: BillCreate,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):

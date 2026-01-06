@@ -9,11 +9,7 @@ import uuid
 import os
 from pathlib import Path
 
-try:
-    from .auth import get_current_user_id
-except ImportError:
-    def get_current_user_id():
-        return "system"
+from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/receipts", tags=["receipts"])
 
@@ -63,7 +59,7 @@ class ReceiptResponse(BaseModel):
 
 @router.get("/", response_model=List[ReceiptResponse])
 async def get_receipts(
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     status: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
@@ -154,7 +150,7 @@ async def get_receipts(
 @router.post("/", response_model=ReceiptResponse)
 async def create_receipt(
     receipt: ReceiptCreate,
-    org_id: str,
+    org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):
@@ -296,7 +292,7 @@ async def upload_receipt(
         # Create receipt record
         receipt_data = ReceiptCreate(
             file_name=file.filename or unique_filename,
-            file_url=f"/uploads/{org_id or 'default'}/{encrypted_filename}",
+            file_url=f"/uploads/{org_id}/{encrypted_filename}",
             vendor_name=None,
             amount=None,
             date=datetime.now().date().isoformat(),
@@ -306,7 +302,7 @@ async def upload_receipt(
 
         receipt = await create_receipt(
             receipt_data,
-            org_id or "default-org",
+            org_id,
             entity_id,
             current_user_id
         )
