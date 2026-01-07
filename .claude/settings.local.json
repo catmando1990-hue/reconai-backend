@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(.\\\\venv\\\\Scripts\\\\python.exe -m pytest:*)",
+      "Bash(venvScriptspython.exe -m pytest:*)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_upload.py -v)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/ -v --tb=short)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_transactions.py -v -s)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_transactions.py::test_transactions -v -s)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_insights.py::test_insights -v -s)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/ -v --tb=line)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_insights.py -v -s)",
+      "Bash(c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend\\\\venv\\\\Scripts\\\\python.exe -m pytest:*)",
+      "Bash(powershell -Command \"cd 'c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend'; .\\\\venv\\\\Scripts\\\\python.exe -m pytest tests\\\\test_transactions.py -v\":*)"
+    ]
+  }
+}

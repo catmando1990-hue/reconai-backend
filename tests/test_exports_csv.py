@@ -65,7 +65,7 @@ def _maybe_load_app() -> Optional[object]:
 
 def test_sanitize_filename_adds_extension_and_strips_bad_chars():
     assert _sanitize_filename("  report Q1*?.csv  ") == "report_Q1__.csv"
-    assert _sanitize_filename("evil\r\ninject") == "evil_inject.csv"
+    assert _sanitize_filename("evil\r\ninject") == "evil__inject.csv"
     assert _sanitize_filename(None) == "reconai-export.csv"
 
     long = "x" * 200

@@ -164,13 +164,13 @@ app.include_router(accounting_router)
 app.include_router(tax_router)
 app.include_router(credit_router)
 app.include_router(feedback_router)
+app.include_router(mvp_router)  # Load before plaid_router to avoid /transactions route conflict
 app.include_router(plaid_router)
 app.include_router(bookkeeping_router)
 app.include_router(financial_reports_router)
 app.include_router(tax_intelligence_router)
 app.include_router(claude.router)
 app.include_router(health_router)
-app.include_router(mvp_router)
 
 
 @app.on_event("startup")
