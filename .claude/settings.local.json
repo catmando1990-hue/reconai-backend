@@ -13,7 +13,10 @@
       "Bash(venv/Scripts/python.exe -m pytest tests/ -v --tb=line)",
       "Bash(venv/Scripts/python.exe -m pytest tests/test_insights.py -v -s)",
       "Bash(c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend\\\\venv\\\\Scripts\\\\python.exe -m pytest:*)",
-      "Bash(powershell -Command \"cd 'c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend'; .\\\\venv\\\\Scripts\\\\python.exe -m pytest tests\\\\test_transactions.py -v\":*)"
+      "Bash(powershell -Command \"cd 'c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend'; .\\\\venv\\\\Scripts\\\\python.exe -m pytest tests\\\\test_transactions.py -v\":*)",
+      "Bash(.venvScriptspython.exe -m uvicorn app.main:app --reload --port 8000)",
+      "Bash(c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend\\\\venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(powershell -Command:*)"
     ]
   }
 }
