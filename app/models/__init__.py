@@ -1,11 +1,13 @@
-# app/models.py
-
+# app/models/__init__.py
+# Re-export all models from the original models.py for backwards compatibility
 from __future__ import annotations
 
 import datetime
 from typing import List, Optional, Literal, Dict
 
 from pydantic import BaseModel
+
+from .audit import AuditEvent
 
 
 # -----------------------------
@@ -132,3 +134,21 @@ class FeedbackResponse(BaseModel):
 class MerchantFeedbackRequest(BaseModel):
     merchant: str
     correct_label: Literal["business", "personal", "transfer", "uncertain"]
+
+
+__all__ = [
+    "AuditEvent",
+    "Transaction",
+    "TransactionsRequest",
+    "TransactionsResponse",
+    "LinkTokenRequest",
+    "PublicTokenExchangeRequest",
+    "AccountingSummaryResponse",
+    "TaxCategorySummary",
+    "TaxAnalysisResponse",
+    "CreditFactor",
+    "CreditAnalysisResponse",
+    "FeedbackRequest",
+    "FeedbackResponse",
+    "MerchantFeedbackRequest",
+]

@@ -54,6 +54,7 @@ from app.routers.tax_intelligence import router as tax_intelligence_router
 from app.routers.mvp import router as mvp_router
 from app.routers.intelligence import router as intelligence_router
 from app.routers.cfo import router as cfo_router
+from app.routers.audit import router as audit_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -175,6 +176,7 @@ app.include_router(claude.router)
 app.include_router(health_router, prefix="/health")
 app.include_router(intelligence_router, prefix="/intelligence")
 app.include_router(cfo_router, prefix="/cfo")
+app.include_router(audit_router)
 
 
 @app.on_event("startup")
