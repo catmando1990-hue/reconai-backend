@@ -58,6 +58,11 @@ from app.routers.audit import router as audit_router
 from app.routers.policy import router as policy_router
 from app.routers.evidence import router as evidence_router
 from app.routers.onboarding import router as onboarding_router
+from app.routers.rbac import router as rbac_router
+from app.routers.retention import router as retention_router
+from app.routers.export_pack import router as export_pack_router
+from app.routers.status import router as status_router
+from app.routers.support import router as support_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -183,6 +188,11 @@ app.include_router(audit_router)
 app.include_router(policy_router)
 app.include_router(evidence_router)
 app.include_router(onboarding_router)
+app.include_router(rbac_router)
+app.include_router(retention_router)
+app.include_router(export_pack_router)
+app.include_router(status_router)
+app.include_router(support_router)
 
 
 @app.on_event("startup")

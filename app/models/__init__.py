@@ -11,6 +11,10 @@ from .audit import AuditEvent
 from .policy import PolicySnapshot, FeatureFlagKey, Role
 from .enterprise_roles import has_any_role
 from .evidence import EvidenceItem, EvidenceType
+from .rbac import RbacSnapshot, Permission
+from .retention import RetentionPolicy, RetentionScope
+from .export_pack import ExportPackRequest, ExportPackResponse, ExportInclude
+from .support import SupportTicket, SupportTicketCreate, SupportPriority, SupportStatus
 
 
 # -----------------------------
@@ -147,6 +151,17 @@ __all__ = [
     "has_any_role",
     "EvidenceItem",
     "EvidenceType",
+    "RbacSnapshot",
+    "Permission",
+    "RetentionPolicy",
+    "RetentionScope",
+    "ExportPackRequest",
+    "ExportPackResponse",
+    "ExportInclude",
+    "SupportTicket",
+    "SupportTicketCreate",
+    "SupportPriority",
+    "SupportStatus",
     "Transaction",
     "TransactionsRequest",
     "TransactionsResponse",
