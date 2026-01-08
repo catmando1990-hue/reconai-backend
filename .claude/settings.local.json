@@ -16,7 +16,14 @@
       "Bash(powershell -Command \"cd 'c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend'; .\\\\venv\\\\Scripts\\\\python.exe -m pytest tests\\\\test_transactions.py -v\":*)",
       "Bash(.venvScriptspython.exe -m uvicorn app.main:app --reload --port 8000)",
       "Bash(c:\\\\Users\\\\jeuba\\\\Documents\\\\GitHub\\\\reconai-backend\\\\venv\\\\Scripts\\\\python.exe:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(python -m uvicorn:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m ensurepip:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(python -c \"import urllib.request; urllib.request.urlretrieve\\(''https://bootstrap.pypa.io/get-pip.py'', ''get-pip.py''\\)\")",
+      "Bash(python:*)"
     ]
   }
 }

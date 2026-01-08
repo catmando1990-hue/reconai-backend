@@ -86,3 +86,14 @@ logs/
 # Local configuration
 .env.local
 .env.*.local
+
+# Node (some tooling deps)
+node_modules/
+
+# Environment files
+.env
+.env.*
+
+# Local data / sqlite
+*.db
+*.sqlite

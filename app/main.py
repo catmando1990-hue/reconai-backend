@@ -52,6 +52,8 @@ from app.routers.health import router as health_router, set_startup_time
 from app.routers.financial_reports import router as financial_reports_router
 from app.routers.tax_intelligence import router as tax_intelligence_router
 from app.routers.mvp import router as mvp_router
+from app.routers.intelligence import router as intelligence_router
+from app.routers.cfo import router as cfo_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -124,7 +126,7 @@ def root():
     return {
         "status": "ok",
         "service": "reconai-backend",
-        "version": "0.1.0"
+        "version": "1.0.0"
     }
 
 
@@ -170,7 +172,9 @@ app.include_router(bookkeeping_router)
 app.include_router(financial_reports_router)
 app.include_router(tax_intelligence_router)
 app.include_router(claude.router)
-app.include_router(health_router)
+app.include_router(health_router, prefix="/health")
+app.include_router(intelligence_router, prefix="/intelligence")
+app.include_router(cfo_router, prefix="/cfo")
 
 
 @app.on_event("startup")

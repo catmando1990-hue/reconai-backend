@@ -25,7 +25,7 @@ def set_startup_time():
     global _startup_time
     _startup_time = datetime.utcnow()
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("", response_model=HealthResponse)
 async def health_check():
     """
     Health check endpoint for monitoring and frontend connectivity verification.
@@ -40,12 +40,12 @@ async def health_check():
         conn.close()
     except Exception as e:
         db_status = f"error: {str(e)}"
-    
+
     # Calculate uptime
     uptime = None
     if _startup_time:
         uptime = (datetime.utcnow() - _startup_time).total_seconds()
-    
+
     return HealthResponse(
         status="healthy" if db_status == "connected" else "degraded",
         service="reconai-backend",
@@ -56,7 +56,7 @@ async def health_check():
         uptime_seconds=uptime,
     )
 
-@router.get("/")
+@router.get("/ping")
 async def root():
     """Root endpoint - basic status check"""
     return {
