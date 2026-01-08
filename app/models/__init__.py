@@ -8,6 +8,9 @@ from typing import List, Optional, Literal, Dict
 from pydantic import BaseModel
 
 from .audit import AuditEvent
+from .policy import PolicySnapshot, FeatureFlagKey, Role
+from .enterprise_roles import has_any_role
+from .evidence import EvidenceItem, EvidenceType
 
 
 # -----------------------------
@@ -138,6 +141,12 @@ class MerchantFeedbackRequest(BaseModel):
 
 __all__ = [
     "AuditEvent",
+    "PolicySnapshot",
+    "FeatureFlagKey",
+    "Role",
+    "has_any_role",
+    "EvidenceItem",
+    "EvidenceType",
     "Transaction",
     "TransactionsRequest",
     "TransactionsResponse",

@@ -55,6 +55,9 @@ from app.routers.mvp import router as mvp_router
 from app.routers.intelligence import router as intelligence_router
 from app.routers.cfo import router as cfo_router
 from app.routers.audit import router as audit_router
+from app.routers.policy import router as policy_router
+from app.routers.evidence import router as evidence_router
+from app.routers.onboarding import router as onboarding_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -177,6 +180,9 @@ app.include_router(health_router, prefix="/health")
 app.include_router(intelligence_router, prefix="/intelligence")
 app.include_router(cfo_router, prefix="/cfo")
 app.include_router(audit_router)
+app.include_router(policy_router)
+app.include_router(evidence_router)
+app.include_router(onboarding_router)
 
 
 @app.on_event("startup")
