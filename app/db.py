@@ -550,5 +550,70 @@ def init_db() -> None:
         # conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_bill ON bill_payments(bill_id)")
         # conn.execute("CREATE INDEX IF NOT EXISTS idx_bill_payments_vendor ON bill_payments(vendor_id)")
 
+        # =================================================================
+        # STEPS 15-19: GOVERNANCE & DEPLOYMENT CONTROL
+        # =================================================================
+
+        # Step 15: Deploy Runs
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deploy_runs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'draft',
+                commit_sha TEXT,
+                preview_url TEXT,
+                initiated_by TEXT,
+                approved_by TEXT,
+                approval_signature TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Step 16: System State
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS system_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                incident_mode INTEGER NOT NULL DEFAULT 0,
+                last_rollback_at TEXT,
+                rolled_back_to_run_id TEXT,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("INSERT OR IGNORE INTO system_state (id) VALUES (1)")
+
+        # Step 17: Deploy Run Approvals
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deploy_run_approvals (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                approved_by TEXT NOT NULL,
+                approved_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Step 18: Audit Log
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id TEXT PRIMARY KEY,
+                action TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                run_id TEXT,
+                metadata TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
+        # Step 19: Feature Flags
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS feature_flags (
+                id TEXT PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                run_id TEXT,
+                description TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+
         conn.commit()
         print("Multi-tenancy database tables created")
