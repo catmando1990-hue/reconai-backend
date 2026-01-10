@@ -63,6 +63,9 @@ from app.routers.retention import router as retention_router
 from app.routers.export_pack import router as export_pack_router
 from app.routers.status import router as status_router
 from app.routers.support import router as support_router
+from app.routers.deploy_runs import router as deploy_runs_router
+from app.routers.system_state import router as system_state_router
+from app.routers.governance import router as governance_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -76,6 +79,10 @@ def get_allowed_origins() -> list[str]:
         "http://127.0.0.1:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
+        "http://localhost:1420",
+        "http://127.0.0.1:1420",
+        "tauri://localhost",
+        "https://tauri.localhost",
         "https://reconai-frontend.onrender.com",
         "https://reconai-frontend.vercel.app",
         "https://reconaitechnology.com",
@@ -104,8 +111,10 @@ app = FastAPI(
 )
 
 from app.middleware import AuthContextMiddleware, RateLimitMiddleware
+from app.middleware.incident_guard import IncidentGuardMiddleware
 app.add_middleware(AuthContextMiddleware)
 app.add_middleware(RateLimitMiddleware)
+app.add_middleware(IncidentGuardMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 if os.getenv("ENVIRONMENT") == "production":
@@ -193,6 +202,9 @@ app.include_router(retention_router)
 app.include_router(export_pack_router)
 app.include_router(status_router)
 app.include_router(support_router)
+app.include_router(deploy_runs_router)
+app.include_router(system_state_router)
+app.include_router(governance_router)
 
 
 @app.on_event("startup")
@@ -213,6 +225,10 @@ async def startup_event():
     print(">> Initializing database...")
     await run_in_threadpool(init_db)
     print(">> Database ready")
+
+    # Step 15: Enforce approved run guardrail in production
+    from app.guardrails import enforce_approved_run
+    await run_in_threadpool(enforce_approved_run)
 
     print(">> Initializing bookkeeping engine...")
     bookkeeper = await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
