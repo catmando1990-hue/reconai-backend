@@ -9,7 +9,17 @@ def accounts(ctx=Depends(get_current_context)):
 
 @router.get("/transactions")
 def transactions(start: str | None = None, end: str | None = None, ctx=Depends(get_current_context)):
-    return []
+    # Read-only normalized transaction payload
+    return [
+        {
+            "id": "tx_1",
+            "date": "2026-01-12",
+            "merchant": "Adobe",
+            "amount": -54.99,
+            "account": "Amex Biz",
+            "duplicate": True,
+        }
+    ]
 
 @router.get("/vendors")
 def vendors(ctx=Depends(get_current_context)):
