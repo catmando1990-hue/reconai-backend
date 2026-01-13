@@ -78,6 +78,9 @@ from app.routers.system_status_api import router as system_status_api_router
 from app.routers.release_hardening_api import router as release_hardening_api_router
 from app.routers.intelligence_guardrails_api import router as intelligence_guardrails_api_router
 from app.routers.me_claims import router as me_claims_router
+from app.routers.intelligence_categorization_api import router as intelligence_categorization_router
+from app.routers.intelligence_duplicates_api import router as intelligence_duplicates_router
+from app.routers.intelligence_cashflow_api import router as intelligence_cashflow_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -250,6 +253,10 @@ app.include_router(release_hardening_api_router)
 app.include_router(intelligence_guardrails_api_router)
 # BUILD 15 — Claims debug endpoint
 app.include_router(me_claims_router)
+# INTELLIGENCE v1 — Advisory-only intelligence endpoints
+app.include_router(intelligence_categorization_router)  # 1A: Categorization suggestions
+app.include_router(intelligence_duplicates_router)      # 1B: Duplicate detection
+app.include_router(intelligence_cashflow_router)        # 1C: Cashflow insights
 
 
 @app.on_event("startup")
@@ -318,6 +325,7 @@ async def startup_event():
     print(">> BUILD 14: Enforcement consistency (request_id in all errors, x-request-id header)")
     print(">> BUILD 15: Claims debug at /api/me/claims, require_admin helper available")
     print(">> BUILD 16: Plaid idempotency helpers ready (tx_identity_key)")
+    print(">> INTELLIGENCE v1: Advisory-only endpoints active (categorization, duplicates, cashflow)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
