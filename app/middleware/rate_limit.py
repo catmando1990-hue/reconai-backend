@@ -4,11 +4,21 @@ Rate limiting middleware to prevent abuse and brute force attacks.
 Uses in-memory storage for simplicity. For production, use Redis.
 """
 
-from fastapi import Request, HTTPException, status
-from starlette.middleware.base import BaseHTTPMiddleware
-from datetime import datetime, timedelta
-from typing import Dict, List
 import time
+import uuid
+from typing import Dict, List
+
+from fastapi import Request, status
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+
+
+def _rid(request: Request) -> str:
+    """Get request ID from state or generate one."""
+    rid = getattr(getattr(request, "state", object()), "request_id", None)
+    if rid:
+        return str(rid)
+    return request.headers.get("x-request-id") or str(uuid.uuid4())
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -61,27 +71,45 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             # Auth endpoints: 5 requests per minute (prevent brute force)
             key = f"auth:{client_ip}"
             if self._is_rate_limited(key, max_requests=5, window_seconds=60):
-                raise HTTPException(
+                return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Too many authentication attempts. Please try again in 1 minute."
+                    content={
+                        "error": {
+                            "code": "RATE_LIMITED",
+                            "message": "Too many authentication attempts. Please try again in 1 minute.",
+                            "request_id": _rid(request),
+                        }
+                    },
                 )
 
         elif path.startswith("/api/"):
             # API endpoints: 100 requests per minute per user/IP
             key = f"api:{user_id or client_ip}"
             if self._is_rate_limited(key, max_requests=100, window_seconds=60):
-                raise HTTPException(
+                return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Rate limit exceeded. Please slow down."
+                    content={
+                        "error": {
+                            "code": "RATE_LIMITED",
+                            "message": "Rate limit exceeded. Please slow down.",
+                            "request_id": _rid(request),
+                        }
+                    },
                 )
 
         elif path in ["/api/contact/", "/api/newsletter/subscribe"]:
             # Public contact/newsletter: 3 requests per 5 minutes
             key = f"public:{client_ip}"
             if self._is_rate_limited(key, max_requests=3, window_seconds=300):
-                raise HTTPException(
+                return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Too many requests. Please try again later."
+                    content={
+                        "error": {
+                            "code": "RATE_LIMITED",
+                            "message": "Too many requests. Please try again later.",
+                            "request_id": _rid(request),
+                        }
+                    },
                 )
 
         response = await call_next(request)
@@ -135,9 +163,15 @@ class ProductionRateLimitMiddleware(BaseHTTPMiddleware):
                 self.redis.expire(key, window)
 
             if current > limit:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Rate limit exceeded. Try again in {window} seconds."
+                    content={
+                        "error": {
+                            "code": "RATE_LIMITED",
+                            "message": f"Rate limit exceeded. Try again in {window} seconds.",
+                            "request_id": _rid(request),
+                        }
+                    },
                 )
         except Exception as e:
             # If Redis fails, allow request (fail open)
