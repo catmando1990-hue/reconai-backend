@@ -78,11 +78,19 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
+# Windows reserved / invalid files
 nul
 NUL
+null
+NULL
 
 # Claude temp files
 tmpclaude-*
+
+# Temp / backup files
+*.tmp
+*.temp
 
 # Logs
 *.log
