@@ -75,6 +75,8 @@ from app.routers.audit_api import router as audit_api_router
 from app.routers.policy_api import router as policy_api_router
 from app.routers.maintenance_api import router as maintenance_api_router
 from app.routers.system_status_api import router as system_status_api_router
+from app.routers.release_hardening_api import router as release_hardening_api_router
+from app.routers.intelligence_guardrails_api import router as intelligence_guardrails_api_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -230,6 +232,10 @@ app.include_router(policy_api_router)
 app.include_router(maintenance_api_router)
 # BUILD 11 — System Health Status
 app.include_router(system_status_api_router)
+# BUILD 12 — Release Hardening (Structured Errors)
+app.include_router(release_hardening_api_router)
+# BUILD 13 — Intelligence Guardrails (Advisory Mode)
+app.include_router(intelligence_guardrails_api_router)
 
 
 @app.on_event("startup")
@@ -293,6 +299,8 @@ async def startup_event():
     print(">> Policy API mounted at: /api/policy (BUILD 6 - acknowledgements audit-logged)")
     print(">> Maintenance API mounted at: /api/admin/maintenance (BUILD 7+10 - admin-only, extended status)")
     print(">> System Status API mounted at: /api/system/status (BUILD 11 - read-only health)")
+    print(">> Release Hardening API mounted at: /api/hardening/config (BUILD 12 - structured errors)")
+    print(">> Intelligence Guardrails API mounted at: /api/intelligence/guardrails (BUILD 13 - advisory mode)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
