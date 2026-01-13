@@ -121,12 +121,19 @@ app = FastAPI(
     description="Financial Intelligence API for ReconAI"
 )
 
+# BUILD 12E — Register structured error handlers BEFORE router mounts
+from app.middleware.error_envelope import register_error_handlers
+register_error_handlers(app)
+
 from app.middleware import AuthContextMiddleware, RateLimitMiddleware
+from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.middleware.incident_guard import IncidentGuardMiddleware
 app.add_middleware(AuthContextMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(IncidentGuardMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+# BUILD 12E — Request body size limit (1MB default)
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=1_000_000)
 
 if os.getenv("ENVIRONMENT") == "production":
     app.add_middleware(
@@ -301,6 +308,7 @@ async def startup_event():
     print(">> System Status API mounted at: /api/system/status (BUILD 11 - read-only health)")
     print(">> Release Hardening API mounted at: /api/hardening/config (BUILD 12 - structured errors)")
     print(">> Intelligence Guardrails API mounted at: /api/intelligence/guardrails (BUILD 13 - advisory mode)")
+    print(">> BUILD 12E: Enforcement hardening active (structured errors, 1MB body limit, outbound timeouts)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
