@@ -69,6 +69,8 @@ from app.routers.support import router as support_router
 from app.routers.deploy_runs import router as deploy_runs_router
 from app.routers.system_state import router as system_state_router
 from app.routers.governance import router as governance_router
+from app.routers.plaid_hardening import router as plaid_hardening_router
+from app.routers.transaction_overrides import router as transaction_overrides_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -212,6 +214,11 @@ app.include_router(deploy_runs_router)
 app.include_router(system_state_router)
 app.include_router(governance_router)
 
+# BUILD 3C/3D — Plaid Ingestion Hardening
+app.include_router(plaid_hardening_router)
+# BUILD 4 — Controlled Write Enablement
+app.include_router(transaction_overrides_router)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -268,6 +275,8 @@ async def startup_event():
     print(">> Bills & AP API mounted at: /api/bills")
     print(">> Financial Reports API mounted at: /api/financial-reports")
     print(">> Tax Intelligence API mounted at: /api/tax-intelligence")
+    print(">> Plaid Hardening API mounted at: /api/plaid (BUILD 3C/3D - sync disabled by default)")
+    print(">> Transaction Overrides API mounted at: /api/transactions/:id/override (BUILD 4 - writes disabled by default)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
