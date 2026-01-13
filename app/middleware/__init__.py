@@ -5,6 +5,7 @@ from .auth_context import AuthContextMiddleware
 from .rate_limit import RateLimitMiddleware, ProductionRateLimitMiddleware
 from .body_size_limit import BodySizeLimitMiddleware
 from .error_envelope import register_error_handlers
+from .request_id import RequestIdMiddleware
 
 __all__ = [
     "AuthContextMiddleware",
@@ -12,4 +13,5 @@ __all__ = [
     "ProductionRateLimitMiddleware",
     "BodySizeLimitMiddleware",
     "register_error_handlers",
+    "RequestIdMiddleware",
 ]

@@ -77,6 +77,7 @@ from app.routers.maintenance_api import router as maintenance_api_router
 from app.routers.system_status_api import router as system_status_api_router
 from app.routers.release_hardening_api import router as release_hardening_api_router
 from app.routers.intelligence_guardrails_api import router as intelligence_guardrails_api_router
+from app.routers.me_claims import router as me_claims_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -121,18 +122,22 @@ app = FastAPI(
     description="Financial Intelligence API for ReconAI"
 )
 
-# BUILD 12E — Register structured error handlers BEFORE router mounts
+# BUILD 14 — Register structured error handlers BEFORE router mounts
 from app.middleware.error_envelope import register_error_handlers
 register_error_handlers(app)
 
 from app.middleware import AuthContextMiddleware, RateLimitMiddleware
 from app.middleware.body_size_limit import BodySizeLimitMiddleware
+from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.incident_guard import IncidentGuardMiddleware
+
+# BUILD 14 — RequestIdMiddleware must be early to propagate x-request-id
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(AuthContextMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(IncidentGuardMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
-# BUILD 12E — Request body size limit (1MB default)
+# BUILD 14 — Request body size limit (1MB default, includes request_id in errors)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=1_000_000)
 
 if os.getenv("ENVIRONMENT") == "production":
@@ -243,6 +248,8 @@ app.include_router(system_status_api_router)
 app.include_router(release_hardening_api_router)
 # BUILD 13 — Intelligence Guardrails (Advisory Mode)
 app.include_router(intelligence_guardrails_api_router)
+# BUILD 15 — Claims debug endpoint
+app.include_router(me_claims_router)
 
 
 @app.on_event("startup")
@@ -308,7 +315,9 @@ async def startup_event():
     print(">> System Status API mounted at: /api/system/status (BUILD 11 - read-only health)")
     print(">> Release Hardening API mounted at: /api/hardening/config (BUILD 12 - structured errors)")
     print(">> Intelligence Guardrails API mounted at: /api/intelligence/guardrails (BUILD 13 - advisory mode)")
-    print(">> BUILD 12E: Enforcement hardening active (structured errors, 1MB body limit, outbound timeouts)")
+    print(">> BUILD 14: Enforcement consistency (request_id in all errors, x-request-id header)")
+    print(">> BUILD 15: Claims debug at /api/me/claims, require_admin helper available")
+    print(">> BUILD 16: Plaid idempotency helpers ready (tx_identity_key)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
