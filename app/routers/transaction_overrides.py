@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.auth_context import get_current_context, AuthContext
+from app.services.audit_service import record_audit, get_audit_entries, get_audit_count
 
 
 router = APIRouter(prefix="/api")
@@ -25,32 +26,11 @@ WRITE_CONFIG = WriteConfig()
 
 # In-memory stores
 override_store: dict[str, dict] = {}
-audit_log: list[dict] = []
 
 
 class OverrideRequest(BaseModel):
     category: str
     reason: Optional[str] = None
-
-
-def record_audit(
-    actor: str,
-    action: str,
-    entity: str,
-    entity_id: str,
-    payload: dict,
-) -> dict:
-    """Record an audit entry for a write operation"""
-    entry = {
-        "actor": actor,
-        "action": action,
-        "entity": entity,
-        "entity_id": entity_id,
-        "payload": payload,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-    audit_log.append(entry)
-    return entry
 
 
 @router.post("/transactions/{transaction_id}/override")
@@ -194,19 +174,19 @@ async def write_status(ctx: AuthContext = Depends(get_current_context)):
 
 
 @router.get("/write/audit")
-async def get_audit_log(
+async def get_write_audit_log(
     limit: int = 50,
     actor: Optional[str] = None,
     ctx: AuthContext = Depends(get_current_context),
 ):
     """GET /api/write/audit - View audit log (admin)"""
-    entries = audit_log.copy()
+    entries = get_audit_entries(limit=limit)
 
     if actor:
         entries = [e for e in entries if e.get("actor") == actor]
 
     return {
         "ok": True,
-        "entries": entries[-limit:],
-        "total": len(entries),
+        "entries": entries,
+        "total": get_audit_count(),
     }
