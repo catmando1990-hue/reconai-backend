@@ -72,6 +72,7 @@ from app.routers.governance import router as governance_router
 from app.routers.plaid_hardening import router as plaid_hardening_router
 from app.routers.transaction_overrides import router as transaction_overrides_router
 from app.routers.audit_api import router as audit_api_router
+from app.routers.policy_api import router as policy_api_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -221,6 +222,8 @@ app.include_router(plaid_hardening_router)
 app.include_router(transaction_overrides_router)
 # BUILD 5 — Audit Log + Compliance Surface (Read-Only)
 app.include_router(audit_api_router)
+# BUILD 6 — Policy & Disclaimer Enforcement
+app.include_router(policy_api_router)
 
 
 @app.on_event("startup")
@@ -281,6 +284,7 @@ async def startup_event():
     print(">> Plaid Hardening API mounted at: /api/plaid (BUILD 3C/3D - sync disabled by default)")
     print(">> Transaction Overrides API mounted at: /api/transactions/:id/override (BUILD 4 - writes disabled by default)")
     print(">> Audit API mounted at: /api/audit (BUILD 5 - read-only)")
+    print(">> Policy API mounted at: /api/policy (BUILD 6 - acknowledgements audit-logged)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
