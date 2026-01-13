@@ -33,6 +33,7 @@ from app.routers.plaid import router as plaid_router
 from app.routers.bookkeeping import router as bookkeeping_router
 from app.routers.auth import router as auth_router
 from app.routers.me import router as me_router
+from app.routers.readonly import router as readonly_router
 from app.routers.users import router as users_router
 from app.routers.vendors import router as vendors_router
 from app.routers.bills import router as bills_router
@@ -163,6 +164,7 @@ app.add_api_route(
 
 app.include_router(auth_router)
 app.include_router(me_router)
+app.include_router(readonly_router)
 app.include_router(users_router)
 app.include_router(vendors_router)
 app.include_router(bills_router)
