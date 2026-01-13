@@ -78,6 +78,11 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+nul
+NUL
+
+# Claude temp files
+tmpclaude-*
 
 # Logs
 *.log
