@@ -74,6 +74,7 @@ from app.routers.transaction_overrides import router as transaction_overrides_ro
 from app.routers.audit_api import router as audit_api_router
 from app.routers.policy_api import router as policy_api_router
 from app.routers.maintenance_api import router as maintenance_api_router
+from app.routers.system_status_api import router as system_status_api_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -225,8 +226,10 @@ app.include_router(transaction_overrides_router)
 app.include_router(audit_api_router)
 # BUILD 6 — Policy & Disclaimer Enforcement
 app.include_router(policy_api_router)
-# BUILD 7 — Admin Maintenance Kill Switch
+# BUILD 7 + BUILD 10 — Admin Maintenance Kill Switch + Extended Status
 app.include_router(maintenance_api_router)
+# BUILD 11 — System Health Status
+app.include_router(system_status_api_router)
 
 
 @app.on_event("startup")
@@ -288,7 +291,8 @@ async def startup_event():
     print(">> Transaction Overrides API mounted at: /api/transactions/:id/override (BUILD 4 - writes disabled by default)")
     print(">> Audit API mounted at: /api/audit (BUILD 5 - read-only)")
     print(">> Policy API mounted at: /api/policy (BUILD 6 - acknowledgements audit-logged)")
-    print(">> Maintenance API mounted at: /api/admin/maintenance (BUILD 7 - admin-only, default OFF)")
+    print(">> Maintenance API mounted at: /api/admin/maintenance (BUILD 7+10 - admin-only, extended status)")
+    print(">> System Status API mounted at: /api/system/status (BUILD 11 - read-only health)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
