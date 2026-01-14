@@ -82,6 +82,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     },
                 )
 
+        elif path.startswith("/files"):
+            # Ingestion endpoints: 30 requests per minute (file uploads/analysis)
+            key = f"ingestion:{user_id or client_ip}"
+            if self._is_rate_limited(key, max_requests=30, window_seconds=60):
+                return JSONResponse(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    content={
+                        "error": {
+                            "code": "RATE_LIMITED",
+                            "message": "Too many file operations. Please slow down.",
+                            "request_id": _rid(request),
+                        }
+                    },
+                )
+
         elif path.startswith("/api/"):
             # API endpoints: 300 requests per minute per user/IP (dashboard makes many concurrent calls)
             key = f"api:{user_id or client_ip}"
