@@ -17,7 +17,7 @@ import secrets
 import string
 from datetime import timedelta
 
-from app.auth.context import get_current_context, AuthContext
+from app.auth_context import get_current_context, AuthContext
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Actions"])
 
