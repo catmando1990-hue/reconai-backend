@@ -535,3 +535,57 @@ async def debug_user_lookup(
         results["default_org_id"] = found_user.default_org_id
 
     return results
+
+
+@router.post("/debug/fix-user-org")
+async def fix_user_organization(
+    email: str,
+    org_name: Optional[str] = None,
+    service: OrganizationService = Depends(get_org_service)
+):
+    """
+    Debug endpoint: Create an organization for a user who doesn't have one.
+    This fixes users who were linked via link-clerk but don't have an org.
+    """
+    user = service.get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {email}")
+
+    # Check if user already has orgs
+    orgs = service.list_user_organizations(user.id)
+    if orgs:
+        return {
+            "success": False,
+            "message": "User already has organizations",
+            "organizations": [{"id": o.id, "name": o.name} for o in orgs]
+        }
+
+    # Create a new organization for the user
+    slug_base = email.split("@")[0].lower().replace(".", "-").replace("_", "-")
+    org_slug = f"{slug_base}-org"
+    org_display_name = org_name or f"{user.first_name or slug_base}'s Organization"
+
+    org, _ = service.create_organization(
+        name=org_display_name,
+        slug=org_slug,
+        owner_email=email,
+        tier="individual"
+    )
+
+    # Update user's default_org_id
+    import sqlite3
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE users SET default_org_id = ? WHERE id = ?",
+            (org.id, user.id)
+        )
+        conn.commit()
+
+    return {
+        "success": True,
+        "message": "Organization created and linked",
+        "user_id": user.id,
+        "organization_id": org.id,
+        "organization_name": org.name,
+        "organization_slug": org.slug
+    }
