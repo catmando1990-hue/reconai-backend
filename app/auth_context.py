@@ -32,12 +32,14 @@ class AuthContext(TypedDict):
     tier: str
     features: list[str]
     permissions: Optional[MemberPermissions]
+    clerk_metadata: Optional[Dict[str, Any]]  # Clerk publicMetadata from JWT
 
 
 class AuthIdentity(TypedDict):
     user_id: str
     email: str
     default_org_id: Optional[str]
+    clerk_metadata: Optional[Dict[str, Any]]  # Clerk publicMetadata from JWT
 
 
 @lru_cache()
@@ -155,7 +157,10 @@ async def get_current_identity(
             detail={"error": "NOT_AUTHORIZED", "message": "User account is inactive"},
         )
 
-    return {"user_id": user.id, "email": user.email, "default_org_id": user.default_org_id}
+    # Extract Clerk metadata from JWT (set via Clerk session token customization)
+    clerk_metadata = payload.get("metadata")
+
+    return {"user_id": user.id, "email": user.email, "default_org_id": user.default_org_id, "clerk_metadata": clerk_metadata}
 
 
 async def get_current_context(
@@ -207,6 +212,7 @@ async def get_current_context(
         "tier": tier,
         "features": features,
         "permissions": permissions,
+        "clerk_metadata": identity.get("clerk_metadata"),
     }
 
 

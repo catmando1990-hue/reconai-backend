@@ -78,14 +78,32 @@ class DiagnosticResult(BaseModel):
 
 
 def assert_admin(ctx: AuthContext):
-    """Ensure the user has admin privileges"""
-    permissions = ctx.get("permissions")
-    if not permissions:
-        raise HTTPException(status_code=403, detail="Admin access required - no permissions found")
+    """Ensure the user has admin privileges.
 
-    role = permissions.get("role", "")
-    if role not in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail=f"Admin access required - role '{role}' not authorized")
+    Checks both:
+    1. Database organization member role (permissions.role)
+    2. Clerk publicMetadata role (clerk_metadata.role)
+
+    Either being 'admin' or 'owner' grants admin access.
+    """
+    # Check Clerk metadata first (from JWT token's publicMetadata)
+    clerk_metadata = ctx.get("clerk_metadata") or {}
+    clerk_role = clerk_metadata.get("role", "")
+    if clerk_role in ["admin", "org:admin", "owner"]:
+        return  # Admin via Clerk metadata
+
+    # Fall back to database organization member role
+    permissions = ctx.get("permissions")
+    if permissions:
+        db_role = permissions.get("role", "")
+        if db_role in ["admin", "owner"]:
+            return  # Admin via database role
+
+    # Neither source confirms admin
+    raise HTTPException(
+        status_code=403,
+        detail=f"Admin access required - clerk_role='{clerk_role}', db_role='{permissions.get('role') if permissions else 'none'}'"
+    )
 
 
 def generate_confirmation_code() -> str:
