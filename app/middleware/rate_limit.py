@@ -83,9 +83,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
 
         elif path.startswith("/api/"):
-            # API endpoints: 100 requests per minute per user/IP
+            # API endpoints: 300 requests per minute per user/IP (dashboard makes many concurrent calls)
             key = f"api:{user_id or client_ip}"
-            if self._is_rate_limited(key, max_requests=100, window_seconds=60):
+            if self._is_rate_limited(key, max_requests=300, window_seconds=60):
                 return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     content={
