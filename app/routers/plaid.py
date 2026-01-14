@@ -856,13 +856,22 @@ async def ai_classify(merchant: str, amount: float, date: str):
 @router.post("/link-token")
 def create_link_token(payload: LinkTokenRequest):
     client = get_plaid_client()
-    request = LinkTokenCreateRequest(
-        user=LinkTokenCreateRequestUser(client_user_id=payload.user_id),
-        client_name="ReconAI",
-        products=[Products("transactions")],
-        country_codes=[CountryCode("US")],
-        language="en",
-    )
+
+    # Base request parameters
+    request_params = {
+        "user": LinkTokenCreateRequestUser(client_user_id=payload.user_id),
+        "client_name": "ReconAI",
+        "products": [Products("transactions")],
+        "country_codes": [CountryCode("US")],
+        "language": "en",
+    }
+
+    # Add redirect_uri for OAuth (required for production with OAuth-enabled banks)
+    redirect_uri = payload.redirect_uri or os.getenv("PLAID_REDIRECT_URI")
+    if redirect_uri:
+        request_params["redirect_uri"] = redirect_uri
+
+    request = LinkTokenCreateRequest(**request_params)
 
     try:
         response = client.link_token_create(request)

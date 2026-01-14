@@ -80,6 +80,7 @@ class TransactionsResponse(BaseModel):
 
 class LinkTokenRequest(BaseModel):
     user_id: str = "test-user"
+    redirect_uri: Optional[str] = None  # Required for OAuth in production
 
 
 class PublicTokenExchangeRequest(BaseModel):
