@@ -81,6 +81,7 @@ from app.routers.me_claims import router as me_claims_router
 from app.routers.intelligence_categorization_api import router as intelligence_categorization_router
 from app.routers.intelligence_duplicates_api import router as intelligence_duplicates_router
 from app.routers.intelligence_cashflow_api import router as intelligence_cashflow_router
+from app.routers.intelligence_status_api import router as intelligence_status_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -257,6 +258,8 @@ app.include_router(me_claims_router)
 app.include_router(intelligence_categorization_router)  # 1A: Categorization suggestions
 app.include_router(intelligence_duplicates_router)      # 1B: Duplicate detection
 app.include_router(intelligence_cashflow_router)        # 1C: Cashflow insights
+# BUILD 28-30 — Intelligence Status (Settings Page)
+app.include_router(intelligence_status_router)
 
 
 @app.on_event("startup")
