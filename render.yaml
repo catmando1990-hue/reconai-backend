@@ -50,10 +50,10 @@ services:
 
       # CORS
       - key: FRONTEND_URL
-        value: https://reconai-frontend.vercel.app
+        value: https://www.reconaitechnology.com
 
       - key: CORS_ORIGINS
-        value: https://reconai-frontend.vercel.app,https://reconai-frontend.onrender.com
+        value: https://reconaitechnology.com,https://www.reconaitechnology.com,https://reconai-frontend.vercel.app,https://reconai-frontend.onrender.com
 
     # Health check
     healthCheckPath: /health
