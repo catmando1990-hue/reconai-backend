@@ -254,15 +254,14 @@ async def signup(
             industry=request.industry.value if request.industry else None
         )
 
-        # Update user with Clerk details
-        # TODO: Add update_user method to service that includes clerk_user_id, first_name, last_name
+        # Update user with Clerk details including clerk_user_id
         import sqlite3
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("""
                 UPDATE users
-                SET first_name = ?, last_name = ?, email_verified = 1
+                SET user_id = ?, first_name = ?, last_name = ?, email_verified = 1
                 WHERE id = ?
-            """, (request.first_name, request.last_name, user.id))
+            """, (request.clerk_user_id, request.first_name, request.last_name, user.id))
             conn.commit()
 
         # Fetch updated user
@@ -303,6 +302,87 @@ async def signup(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Signup failed: {str(e)}"
         )
+
+
+class LinkClerkRequest(BaseModel):
+    """Request to link Clerk user ID to existing user by email"""
+    email: EmailStr
+    clerk_user_id: str
+
+
+@router.post("/link-clerk")
+async def link_clerk_user(
+    request: LinkClerkRequest,
+    authorization: Optional[str] = Header(None),
+    service: OrganizationService = Depends(get_org_service)
+):
+    """
+    Link a Clerk user ID to an existing user account.
+
+    This is used when a user already exists in the database but their
+    Clerk ID wasn't stored (e.g., migration from old auth system).
+
+    Requires valid Clerk JWT to ensure the caller owns the Clerk account.
+    """
+    # Verify the Clerk token first
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization header"
+        )
+
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header format"
+        )
+
+    token = parts[1]
+    payload = verify_clerk_token(token)
+
+    # Verify the clerk_user_id in the request matches the token
+    token_clerk_id = payload.get("sub")
+    if token_clerk_id != request.clerk_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Clerk user ID doesn't match authenticated user"
+        )
+
+    # Find user by email
+    user = service.get_user_by_email(request.email)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found with this email"
+        )
+
+    # Check if this user already has a Clerk ID
+    import sqlite3
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute("SELECT user_id FROM users WHERE id = ?", (user.id,))
+        row = cursor.fetchone()
+        existing_clerk_id = row[0] if row else None
+
+        if existing_clerk_id and existing_clerk_id != request.clerk_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User already linked to a different Clerk account"
+            )
+
+        # Link the Clerk ID
+        conn.execute(
+            "UPDATE users SET user_id = ? WHERE id = ?",
+            (request.clerk_user_id, user.id)
+        )
+        conn.commit()
+
+    return {
+        "success": True,
+        "message": "Clerk account linked successfully",
+        "user_id": user.id,
+        "email": user.email
+    }
 
 
 @router.get("/me", response_model=UserResponse)
