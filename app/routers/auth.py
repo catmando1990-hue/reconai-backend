@@ -482,3 +482,41 @@ async def get_session_info(
             for org in orgs
         ]
     }
+
+
+@router.get("/debug/user-lookup")
+async def debug_user_lookup(
+    email: Optional[str] = None,
+    clerk_id: Optional[str] = None,
+    service: OrganizationService = Depends(get_org_service)
+):
+    """
+    Debug endpoint: Check if a user exists by email or Clerk ID.
+    Returns lookup results without authentication.
+    """
+    results = {
+        "email_query": email,
+        "clerk_id_query": clerk_id,
+        "found_by_email": None,
+        "found_by_clerk_id": None,
+    }
+
+    if email:
+        user = service.get_user_by_email(email)
+        if user:
+            results["found_by_email"] = {
+                "id": user.id,
+                "email": user.email,
+                "is_active": user.is_active,
+            }
+
+    if clerk_id:
+        user = service.get_user_by_clerk_id(clerk_id)
+        if user:
+            results["found_by_clerk_id"] = {
+                "id": user.id,
+                "email": user.email,
+                "is_active": user.is_active,
+            }
+
+    return results

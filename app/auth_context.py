@@ -92,8 +92,9 @@ def _lookup_user_by_clerk_id(service: OrganizationService, clerk_user_id: str):
         user = service.get_user_by_clerk_id(clerk_user_id)
         if user:
             return user
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.warning(f"Clerk ID lookup failed for {clerk_user_id}: {e}")
     return None
 
 
@@ -136,9 +137,16 @@ async def get_current_identity(
         user = _lookup_user_by_clerk_id(service, clerk_user_id)
 
     if not user:
+        import logging
+        logging.warning(f"User not found - clerk_id: {clerk_user_id}, email: {email}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "USER_NOT_FOUND", "message": "User not found. Please complete signup."},
+            detail={
+                "error": "USER_NOT_FOUND",
+                "message": "User not found. Please complete signup.",
+                "clerk_user_id": clerk_user_id,
+                "email": email,
+            },
         )
 
     if not user.is_active:
