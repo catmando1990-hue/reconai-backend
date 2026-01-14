@@ -82,6 +82,7 @@ from app.routers.intelligence_categorization_api import router as intelligence_c
 from app.routers.intelligence_duplicates_api import router as intelligence_duplicates_router
 from app.routers.intelligence_cashflow_api import router as intelligence_cashflow_router
 from app.routers.intelligence_status_api import router as intelligence_status_router
+from app.routers.admin_actions_api import router as admin_actions_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -260,6 +261,8 @@ app.include_router(intelligence_duplicates_router)      # 1B: Duplicate detectio
 app.include_router(intelligence_cashflow_router)        # 1C: Cashflow insights
 # BUILD 28-30 — Intelligence Status (Settings Page)
 app.include_router(intelligence_status_router)
+# BUILD 28-30 — Admin Actions API (Diagnostics & Fixes with Approval Flow)
+app.include_router(admin_actions_router)
 
 
 @app.on_event("startup")
@@ -329,6 +332,7 @@ async def startup_event():
     print(">> BUILD 15: Claims debug at /api/me/claims, require_admin helper available")
     print(">> BUILD 16: Plaid idempotency helpers ready (tx_identity_key)")
     print(">> INTELLIGENCE v1: Advisory-only endpoints active (categorization, duplicates, cashflow)")
+    print(">> BUILD 28-30: Admin Actions API at /api/admin (diagnostics, fixes with approval flow)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
