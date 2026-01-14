@@ -79,8 +79,13 @@ class DiagnosticResult(BaseModel):
 
 def assert_admin(ctx: AuthContext):
     """Ensure the user has admin privileges"""
-    if not ctx.permissions or ctx.permissions.role not in ["admin", "owner"]:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    permissions = ctx.get("permissions")
+    if not permissions:
+        raise HTTPException(status_code=403, detail="Admin access required - no permissions found")
+
+    role = permissions.get("role", "")
+    if role not in ["admin", "owner"]:
+        raise HTTPException(status_code=403, detail=f"Admin access required - role '{role}' not authorized")
 
 
 def generate_confirmation_code() -> str:

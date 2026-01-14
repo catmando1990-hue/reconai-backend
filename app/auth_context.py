@@ -16,12 +16,22 @@ from app.services.organization_service import OrganizationService
 CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL", "https://api.clerk.com/v1/jwks")
 
 
+class MemberPermissions(TypedDict):
+    role: str
+    can_view: bool
+    can_edit: bool
+    can_delete: bool
+    can_manage_users: bool
+    can_manage_billing: bool
+
+
 class AuthContext(TypedDict):
     user_id: str
     email: str
     org_id: str
     tier: str
     features: list[str]
+    permissions: Optional[MemberPermissions]
 
 
 class AuthIdentity(TypedDict):
@@ -75,6 +85,18 @@ def verify_clerk_token(token: str) -> Dict[str, Any]:
         )
 
 
+def _lookup_user_by_clerk_id(service: OrganizationService, clerk_user_id: str):
+    """Look up user by Clerk user ID (sub claim)"""
+    # First try to find by clerk_user_id field if it exists
+    try:
+        user = service.get_user_by_clerk_id(clerk_user_id)
+        if user:
+            return user
+    except Exception:
+        pass
+    return None
+
+
 def get_org_service() -> OrganizationService:
     return OrganizationService(DB_PATH)
 
@@ -101,10 +123,18 @@ async def get_current_identity(
     clerk_user_id = payload.get("sub")
     email = payload.get("email")
 
-    if not clerk_user_id or not email:
-        not_authenticated("Invalid token: missing required claims")
+    if not clerk_user_id:
+        not_authenticated("Invalid token: missing sub claim")
 
-    user = service.get_user_by_email(email)
+    # Try to find user by email first (if present in token)
+    user = None
+    if email:
+        user = service.get_user_by_email(email)
+
+    # If no email in token or user not found by email, try by Clerk ID
+    if not user:
+        user = _lookup_user_by_clerk_id(service, clerk_user_id)
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -137,12 +167,38 @@ async def get_current_context(
         except Exception:
             features = []
 
+    # Get user's role/permissions in the organization
+    permissions: Optional[MemberPermissions] = None
+    try:
+        member = service.get_organization_member(org_id, identity["user_id"])
+        if member:
+            permissions = {
+                "role": member.role.value if hasattr(member.role, 'value') else str(member.role),
+                "can_view": member.permissions.can_view if member.permissions else True,
+                "can_edit": member.permissions.can_edit if member.permissions else False,
+                "can_delete": member.permissions.can_delete if member.permissions else False,
+                "can_manage_users": member.permissions.can_manage_users if member.permissions else False,
+                "can_manage_billing": member.permissions.can_manage_billing if member.permissions else False,
+            }
+    except Exception:
+        # If we can't get member info, default to owner permissions for the org owner
+        if org and hasattr(org, 'owner_id') and org.owner_id == identity["user_id"]:
+            permissions = {
+                "role": "owner",
+                "can_view": True,
+                "can_edit": True,
+                "can_delete": True,
+                "can_manage_users": True,
+                "can_manage_billing": True,
+            }
+
     return {
         "user_id": identity["user_id"],
         "email": identity["email"],
         "org_id": org_id,
         "tier": tier,
         "features": features,
+        "permissions": permissions,
     }
 
 

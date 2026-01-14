@@ -228,6 +228,16 @@ class OrganizationService:
                 return self.get_user(row[0])
             return None
 
+    def get_user_by_clerk_id(self, clerk_user_id: str) -> Optional[User]:
+        """Get user by Clerk user ID (stored in user_id column)"""
+        with sqlite3.connect(self.db_path) as conn:
+            # The user_id column stores the Clerk user ID
+            cursor = conn.execute("SELECT id FROM users WHERE user_id = ?", (clerk_user_id,))
+            row = cursor.fetchone()
+            if row:
+                return self.get_user(row[0])
+            return None
+
     def add_organization_member(
         self,
         org_id: str,
