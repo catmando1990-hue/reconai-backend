@@ -519,4 +519,19 @@ async def debug_user_lookup(
                 "is_active": user.is_active,
             }
 
+    # If we found a user, also get their organizations
+    found_user = None
+    if results.get("found_by_email"):
+        found_user = service.get_user_by_email(email)
+    elif results.get("found_by_clerk_id"):
+        found_user = service.get_user_by_clerk_id(clerk_id)
+
+    if found_user:
+        orgs = service.list_user_organizations(found_user.id)
+        results["organizations"] = [
+            {"id": o.id, "name": o.name, "slug": o.slug}
+            for o in orgs
+        ] if orgs else []
+        results["default_org_id"] = found_user.default_org_id
+
     return results
