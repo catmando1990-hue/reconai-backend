@@ -65,5 +65,5 @@ services:
     # Persistent disk for SQLite database
     disk:
       name: reconai-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1  # 1GB free tier
+      mountPath: /var/data
+      sizeGB: 1  # 1GB starter tier

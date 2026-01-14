@@ -7,9 +7,9 @@ import sqlite3
 from pathlib import Path
 
 # Portable data folder (Render persistent disk)
-# On Render, the disk is mounted at /opt/render/project/src/data
+# On Render, the disk is mounted at /var/data (absolute path, not relative to project)
 # Locally, defaults to ./data
-_DEFAULT_DATA_DIR = "/opt/render/project/src/data" if os.path.exists("/opt/render") else "./data"
+_DEFAULT_DATA_DIR = "/var/data" if os.path.exists("/var/data") else "./data"
 DATA_DIR = Path(os.getenv("DATA_DIR", _DEFAULT_DATA_DIR))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
