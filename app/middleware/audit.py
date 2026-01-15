@@ -80,6 +80,12 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/"):
             return True
 
+        # Always log Plaid ingestion, AI analysis, and exports
+        audit_paths = ["/files", "/plaid", "/intelligence", "/export", "/analyze"]
+        for audit_path in audit_paths:
+            if audit_path in path:
+                return True
+
         return False
 
     def _extract_user_id(self, request: Request) -> str:
@@ -104,7 +110,16 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
 
     def _classify_action(self, method: str, path: str) -> str:
         """Classify the action being performed"""
-        if "auth" in path:
+        # High-value audit actions
+        if "plaid" in path and "sync" in path:
+            return "PLAID_SYNC"
+        elif "plaid" in path:
+            return "PLAID_INGESTION"
+        elif "intelligence" in path or "analyze" in path:
+            return "AI_ANALYSIS"
+        elif "export" in path:
+            return "DATA_EXPORT"
+        elif "auth" in path:
             return "AUTHENTICATION"
         elif method == "GET":
             return "READ"
@@ -135,6 +150,11 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         # Skip if not auditable
         if not self._should_log(path, method):
             return await call_next(request)
+
+        # Get request_id (from RequestIdMiddleware or generate)
+        request_id = getattr(getattr(request, "state", object()), "request_id", None)
+        if not request_id:
+            request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
 
         # Capture request info
         user_id = self._extract_user_id(request)
@@ -174,7 +194,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 response.status_code,
                 ip_address,
                 user_agent,
-                json.dumps({"duration_ms": duration_ms})
+                json.dumps({"duration_ms": duration_ms, "request_id": request_id})
             ))
 
             conn.commit()
