@@ -82,6 +82,8 @@ from app.routers.intelligence_categorization_api import router as intelligence_c
 from app.routers.intelligence_duplicates_api import router as intelligence_duplicates_router
 from app.routers.intelligence_cashflow_api import router as intelligence_cashflow_router
 from app.routers.intelligence_status_api import router as intelligence_status_router
+from app.routers.intelligence_export_api import router as intelligence_export_router
+from app.routers.signals_prioritization_api import router as signals_prioritization_router
 from app.routers.admin_actions_api import router as admin_actions_router
 
 
@@ -263,6 +265,10 @@ app.include_router(intelligence_cashflow_router)        # 1C: Cashflow insights
 app.include_router(intelligence_status_router)
 # BUILD 28-30 — Admin Actions API (Diagnostics & Fixes with Approval Flow)
 app.include_router(admin_actions_router)
+# STEP 4B — Evidence Retention & Manual Exports
+app.include_router(intelligence_export_router)
+# STEP 4C — Signals Prioritization (Deterministic Ranking)
+app.include_router(signals_prioritization_router)
 
 
 @app.on_event("startup")
