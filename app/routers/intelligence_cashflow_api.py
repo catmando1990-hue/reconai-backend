@@ -9,11 +9,9 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 
 from app.auth_context import get_current_context, AuthContext
+from app.guardrails import wrap_intelligence_response
 
 router = APIRouter(prefix="/api/intelligence")
-
-# BUILD 13 guardrails
-CONFIDENCE_THRESHOLD = 0.85
 
 
 @router.get("/cashflow/insights")
@@ -27,51 +25,50 @@ async def get_cashflow_insights(
     Returns cashflow trend analysis and lightweight forecast.
     Advisory-only — does not write or mutate any data.
 
-    Guardrails enforced:
+    Contract enforced via guardrails/intelligence_contract.py:
     - confidence >= 0.85 threshold
-    - explanation cites time window and data inputs
-    - deterministic evidence from actual transactions
+    - explanation required
+    - evidence required
+    - manual-run only
     """
     # Placeholder insights — in production, this would analyze real transaction data
-    insights = {
-        "trend": "stable",
-        "trend_direction": "neutral",
-        "forecast": "slightly_negative",
-        "forecast_horizon_days": 14,
-        "confidence": 0.88,
-        "explanation": f"Net outflows exceeded inflows by 12% over last {window_days} days. "
-                       f"Recurring expenses account for 68% of outflows. "
-                       f"Forecast based on historical patterns and scheduled payments.",
-        "evidence": {
-            "window_days": window_days,
-            "total_inflows": 15420.00,
-            "total_outflows": 17270.40,
-            "net_change": -1850.40,
-            "recurring_expense_ratio": 0.68,
-            "data_points_analyzed": 147,
+    insights = [
+        {
+            "type": "cashflow_trend",
+            "trend": "stable",
+            "trend_direction": "neutral",
+            "forecast": "slightly_negative",
+            "forecast_horizon_days": 14,
+            "confidence": 0.88,
+            "explanation": f"Net outflows exceeded inflows by 12% over last {window_days} days. "
+                           f"Recurring expenses account for 68% of outflows. "
+                           f"Forecast based on historical patterns and scheduled payments.",
+            "evidence": [
+                {"type": "window_days", "value": window_days},
+                {"type": "total_inflows", "value": 15420.00},
+                {"type": "total_outflows", "value": 17270.40},
+                {"type": "net_change", "value": -1850.40},
+                {"type": "recurring_expense_ratio", "value": 0.68},
+                {"type": "data_points_analyzed", "value": 147},
+            ],
         },
-        "recommendations": [
-            {
-                "type": "advisory",
-                "message": "Consider reviewing recurring subscriptions for optimization",
-                "confidence": 0.86,
-            },
-        ],
-    }
-
-    # Verify confidence meets threshold (BUILD 13 guardrail)
-    if insights["confidence"] < CONFIDENCE_THRESHOLD:
-        insights["low_confidence_warning"] = True
-
-    return {
-        "ok": True,
-        "mode": "advisory",
-        "writes_allowed": False,
-        "insights": insights,
-        "guardrails": {
-            "confidence_threshold": CONFIDENCE_THRESHOLD,
-            "explanation_required": True,
-            "signal_backed_only": True,
+        {
+            "type": "recommendation",
+            "confidence": 0.86,
+            "explanation": "Consider reviewing recurring subscriptions for optimization",
+            "evidence": [
+                {"type": "recurring_expense_ratio", "value": 0.68},
+                {"type": "optimization_potential", "value": "medium"},
+            ],
         },
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    ]
+
+    # Apply central contract enforcement (confidence gating + schema validation)
+    response = wrap_intelligence_response(
+        insights,
+        result_key="insights",
+        window_days=window_days,
+        timestamp=datetime.utcnow().isoformat(),
+    )
+
+    return response

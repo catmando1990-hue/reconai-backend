@@ -6,14 +6,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from app.auth_context import get_current_context, AuthContext
+from app.guardrails import wrap_intelligence_response
 
 router = APIRouter(prefix="/api/intelligence")
-
-# BUILD 13 guardrails
-CONFIDENCE_THRESHOLD = 0.85
 
 
 @router.get("/categorization/suggestions")
@@ -27,10 +25,11 @@ async def get_categorization_suggestions(
     Returns AI-suggested categories for uncategorized transactions.
     Advisory-only — does not write or mutate any data.
 
-    Guardrails enforced:
+    Contract enforced via guardrails/intelligence_contract.py:
     - confidence >= 0.85 threshold
     - explanation required
-    - signal-backed evidence
+    - evidence required
+    - manual-run only
     """
     # Placeholder suggestions — in production, this would query ML model
     suggestions = [
@@ -39,37 +38,37 @@ async def get_categorization_suggestions(
             "suggested_category": "Software & SaaS",
             "confidence": 0.92,
             "explanation": "Merchant 'Adobe Inc' historically classified as software subscription based on 47 similar transactions",
-            "evidence": {
-                "merchant_pattern": "Adobe Inc",
-                "similar_transactions": 47,
-                "category_signals": ["recurring", "subscription", "software"],
-            },
+            "evidence": [
+                {"type": "merchant_pattern", "value": "Adobe Inc"},
+                {"type": "similar_transactions", "value": 47},
+                {"type": "category_signals", "value": ["recurring", "subscription", "software"]},
+            ],
         },
         {
             "transaction_id": "tx_example_002",
             "suggested_category": "Office Supplies",
             "confidence": 0.88,
             "explanation": "Merchant 'Staples' matches office supplies category with high confidence",
-            "evidence": {
-                "merchant_pattern": "Staples",
-                "similar_transactions": 23,
-                "category_signals": ["retail", "office", "supplies"],
-            },
+            "evidence": [
+                {"type": "merchant_pattern", "value": "Staples"},
+                {"type": "similar_transactions", "value": 23},
+                {"type": "category_signals", "value": ["retail", "office", "supplies"]},
+            ],
+        },
+        {
+            "transaction_id": "tx_example_003",
+            "suggested_category": "Unknown",
+            "confidence": 0.65,  # Below threshold - will be filtered
+            "explanation": "Low confidence categorization",
+            "evidence": [{"type": "weak_signal", "value": True}],
         },
     ]
 
-    # Filter by confidence threshold (BUILD 13 guardrail)
-    filtered = [s for s in suggestions if s["confidence"] >= CONFIDENCE_THRESHOLD]
+    # Apply central contract enforcement (confidence gating + schema validation)
+    response = wrap_intelligence_response(
+        suggestions[:limit],
+        result_key="suggestions",
+        timestamp=datetime.utcnow().isoformat(),
+    )
 
-    return {
-        "ok": True,
-        "mode": "advisory",
-        "writes_allowed": False,
-        "suggestions": filtered[:limit],
-        "guardrails": {
-            "confidence_threshold": CONFIDENCE_THRESHOLD,
-            "explanation_required": True,
-            "signal_backed_only": True,
-        },
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    return response
