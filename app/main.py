@@ -88,6 +88,8 @@ from app.routers.entitlements_api import router as entitlements_router
 from app.routers.admin_actions_api import router as admin_actions_router
 from app.routers.billing_api import router as billing_api_router
 from app.routers.billing_status_api import router as billing_status_api_router
+from app.routers.billing_sync_api import router as billing_sync_api_router
+from app.routers.billing_safeguards_api import router as billing_safeguards_api_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -278,6 +280,10 @@ app.include_router(entitlements_router)
 app.include_router(billing_api_router)
 # STEP 8 — Billing Status API (Read-Only)
 app.include_router(billing_status_api_router)
+# STEP 8 — Billing Sync API (Manual Reconciliation)
+app.include_router(billing_sync_api_router)
+# STEP 8 — Billing Safeguards API (Cancel/Downgrade)
+app.include_router(billing_safeguards_api_router)
 
 
 @app.on_event("startup")
@@ -354,6 +360,8 @@ async def startup_event():
     print(">> BUILD 28-30: Admin Actions API at /api/admin (diagnostics, fixes with approval flow)")
     print(">> STEP 8: Billing API at /api/billing/create-checkout-session (Stripe Checkout)")
     print(">> STEP 8: Billing Status API at /api/billing/status (read-only)")
+    print(">> STEP 8: Billing Sync API at /api/billing/sync (manual reconciliation)")
+    print(">> STEP 8: Billing Safeguards at /api/billing/cancel, /api/billing/downgrade (scheduled, not immediate)")
     print(">> STEP 8: Stripe prod hardening enforced (fail-closed if secrets missing)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
