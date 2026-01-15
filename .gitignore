@@ -110,3 +110,4 @@ node_modules/
 # Local data / sqlite
 *.db
 *.sqlite
+.env.deploy
