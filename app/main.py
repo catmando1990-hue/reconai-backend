@@ -84,6 +84,7 @@ from app.routers.intelligence_cashflow_api import router as intelligence_cashflo
 from app.routers.intelligence_status_api import router as intelligence_status_router
 from app.routers.intelligence_export_api import router as intelligence_export_router
 from app.routers.signals_prioritization_api import router as signals_prioritization_router
+from app.routers.entitlements_api import router as entitlements_router
 from app.routers.admin_actions_api import router as admin_actions_router
 
 
@@ -269,6 +270,8 @@ app.include_router(admin_actions_router)
 app.include_router(intelligence_export_router)
 # STEP 4C — Signals Prioritization (Deterministic Ranking)
 app.include_router(signals_prioritization_router)
+# STEP 5 — Entitlements API (Tier Limits)
+app.include_router(entitlements_router)
 
 
 @app.on_event("startup")

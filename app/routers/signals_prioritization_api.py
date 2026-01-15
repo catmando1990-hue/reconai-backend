@@ -10,11 +10,12 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
+from app.entitlements import guard_signals_depth, guard_summary_access, get_tier_limits
 
 
 router = APIRouter(prefix="/api/signals", tags=["signals-prioritization"])
@@ -98,6 +99,7 @@ def _calculate_composite_score(
 
 @router.get("/prioritized")
 async def get_prioritized_signals(
+    request: Request,
     ctx: AuthContext = Depends(get_current_context),
     signal_types: Optional[str] = Query(
         None,
@@ -115,7 +117,19 @@ async def get_prioritized_signals(
 
     NO AI calls — all scoring is deterministic.
     User-controlled filters for signal types, confidence, and age.
+    STEP 5: Signals depth gated by tier.
     """
+    # STEP 5: Apply tier-based depth limit
+    tier = ctx.get("tier", "free")
+    effective_limit = guard_signals_depth(
+        user_id=ctx["user_id"],
+        org_id=ctx.get("org_id"),
+        tier=tier,
+        requested_limit=limit,
+        request=request,
+    )
+    tier_limits = get_tier_limits(tier)
+
     # Parse signal type filter
     type_filter = None
     if signal_types:
@@ -147,7 +161,7 @@ async def get_prioritized_signals(
             params.append(cutoff)
 
             query += " ORDER BY created_at DESC LIMIT ?"
-            params.append(limit * 2)  # Fetch extra for re-ranking
+            params.append(effective_limit * 2)  # Fetch extra for re-ranking
 
             cursor = conn.execute(query, params)
             signals = [dict(row) for row in cursor.fetchall()]
@@ -176,26 +190,37 @@ async def get_prioritized_signals(
 
     # Sort by composite score (descending) and assign ranks
     scored_signals.sort(key=lambda x: x["composite_score"], reverse=True)
-    for i, signal in enumerate(scored_signals[:limit]):
+    for i, signal in enumerate(scored_signals[:effective_limit]):
         signal["rank"] = i + 1
 
+    # STEP 5: Include tier info in response
+    was_capped = limit > effective_limit
     return {
         "ok": True,
-        "signals": scored_signals[:limit],
+        "signals": scored_signals[:effective_limit],
         "total_count": len(scored_signals),
-        "returned_count": min(len(scored_signals), limit),
+        "returned_count": min(len(scored_signals), effective_limit),
         "filters_applied": {
             "signal_types": type_filter,
             "min_confidence": min_confidence,
             "max_age_days": max_age_days,
         },
         "scoring_weights": WEIGHTS,
+        "tier_info": {
+            "current_tier": tier,
+            "tier_limit": tier_limits.signals_depth,
+            "requested_limit": limit,
+            "effective_limit": effective_limit,
+            "was_capped": was_capped,
+            "upgrade_for_more": was_capped,
+        },
         "timestamp": datetime.utcnow().isoformat(),
     }
 
 
 @router.get("/summary")
 async def get_signals_summary(
+    request: Request,
     ctx: AuthContext = Depends(get_current_context),
     max_age_days: int = Query(30, ge=1, le=90, description="Maximum age in days"),
 ):
@@ -204,7 +229,17 @@ async def get_signals_summary(
 
     Returns summary statistics for user's signals.
     Useful for dashboard widgets and overview panels.
+    STEP 5: Gated by tier entitlement.
     """
+    # STEP 5: Check tier entitlement for summary
+    tier = ctx.get("tier", "free")
+    guard_summary_access(
+        user_id=ctx["user_id"],
+        org_id=ctx.get("org_id"),
+        tier=tier,
+        request=request,
+    )
+
     summary = {
         "total_signals": 0,
         "by_type": {},

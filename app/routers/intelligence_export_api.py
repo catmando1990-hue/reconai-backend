@@ -13,12 +13,13 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
 from app.guardrails import CONFIDENCE_THRESHOLD
+from app.entitlements import guard_export
 
 router = APIRouter(prefix="/api/intelligence/export", tags=["intelligence-export"])
 
@@ -92,6 +93,7 @@ def _log_export_audit(
 
 @router.post("/csv")
 async def export_intelligence_csv(
+    request: Request,
     ctx: AuthContext = Depends(get_current_context),
     result_type: str = Query(..., description="Type: duplicates, categorization, cashflow"),
     policy_acknowledged: bool = Query(False, description="User must acknowledge export policy"),
@@ -103,7 +105,17 @@ async def export_intelligence_csv(
     Export intelligence results to CSV with policy acknowledgement.
     Requires explicit policy_acknowledged=true parameter.
     Every export is audit logged.
+    STEP 5: Gated by tier entitlement.
     """
+    # STEP 5: Check tier entitlement for exports
+    guard_export(
+        user_id=ctx["user_id"],
+        org_id=ctx.get("org_id"),
+        tier=ctx.get("tier", "free"),
+        export_type=f"csv_{result_type}",
+        request=request,
+    )
+
     # Enforce policy acknowledgement
     if not policy_acknowledged:
         raise HTTPException(
@@ -168,6 +180,7 @@ async def export_intelligence_csv(
 
 @router.post("/json")
 async def export_intelligence_json(
+    request: Request,
     ctx: AuthContext = Depends(get_current_context),
     result_type: str = Query(..., description="Type: duplicates, categorization, cashflow"),
     policy_acknowledged: bool = Query(False, description="User must acknowledge export policy"),
@@ -178,7 +191,17 @@ async def export_intelligence_json(
     Export intelligence results to JSON with policy acknowledgement.
     Requires explicit policy_acknowledged=true parameter.
     Every export is audit logged.
+    STEP 5: Gated by tier entitlement.
     """
+    # STEP 5: Check tier entitlement for exports
+    guard_export(
+        user_id=ctx["user_id"],
+        org_id=ctx.get("org_id"),
+        tier=ctx.get("tier", "free"),
+        export_type=f"json_{result_type}",
+        request=request,
+    )
+
     # Enforce policy acknowledgement
     if not policy_acknowledged:
         raise HTTPException(
