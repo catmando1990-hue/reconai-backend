@@ -220,10 +220,12 @@ def verify_stripe_signature(
     STEP 6: Includes timestamp check to prevent replay attacks.
     """
     if not secret:
-        # If no secret configured, skip verification (dev mode)
-        # Log warning for production
-        if os.getenv("ENVIRONMENT") == "production":
-            print("WARNING: STRIPE_WEBHOOK_SECRET not configured in production!")
+        # STEP 8: Fail closed in production if secret not configured
+        env = os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("NODE_ENV")
+        if env == "production":
+            return (False, "STRIPE_WEBHOOK_SECRET not configured in production - webhook rejected")
+        # Dev mode: skip verification with warning
+        print("WARNING: STRIPE_WEBHOOK_SECRET not configured (dev mode - verification skipped)")
         return (True, None)
 
     if not signature:
@@ -371,17 +373,28 @@ def handle_checkout_session_completed(data: Dict[str, Any]) -> tuple[Optional[st
     """
     Handle checkout.session.completed event.
     STEP 6: New handler for Stripe Checkout flow.
+    STEP 8: Tier persistence from checkout metadata (idempotent).
     """
     session = data['object']
     customer_id = session.get('customer')
     subscription_id = session.get('subscription')
     client_reference_id = session.get('client_reference_id')  # org_id passed during checkout
 
+    # STEP 8: Extract tier and interval from checkout metadata
+    metadata = session.get('metadata', {})
+    new_tier = metadata.get('tier')
+    billing_interval = metadata.get('interval')
+
+    # STEP 8: Validate tier against allowlist at persistence time (defense in depth)
+    ALLOWED_TIERS = {'starter', 'pro', 'govcon'}
+    if new_tier and new_tier not in ALLOWED_TIERS:
+        return (None, f"Invalid tier '{new_tier}' in checkout metadata - rejected")
+
     if not customer_id:
         return (None, "No customer ID in checkout session")
 
-    # Try to find org by client_reference_id first (most reliable)
-    org_id = client_reference_id
+    # Try to find org by metadata org_id first (most reliable - set by billing_api)
+    org_id = metadata.get('org_id') or client_reference_id
 
     # Fallback: find org by customer_id
     if not org_id:
@@ -404,16 +417,34 @@ def handle_checkout_session_completed(data: Dict[str, Any]) -> tuple[Optional[st
     if not org_id:
         return (None, f"Organization not found for customer {customer_id}")
 
-    # Link customer to org if not already linked
+    # STEP 8: Persist tier + billing info (idempotent update)
+    # Only updates if tier is provided in metadata
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            UPDATE organizations
-            SET stripe_customer_id = ?, stripe_subscription_id = ?, updated_at = datetime('now')
-            WHERE id = ? AND (stripe_customer_id IS NULL OR stripe_customer_id = '')
-        """, (customer_id, subscription_id, org_id))
+        if new_tier:
+            # Full update with tier persistence
+            conn.execute("""
+                UPDATE organizations
+                SET stripe_customer_id = ?,
+                    stripe_subscription_id = ?,
+                    tier = ?,
+                    billing_interval = ?,
+                    subscription_status = 'active',
+                    updated_at = datetime('now')
+                WHERE id = ?
+            """, (customer_id, subscription_id, new_tier, billing_interval, org_id))
+        else:
+            # Fallback: just link customer (no tier change)
+            conn.execute("""
+                UPDATE organizations
+                SET stripe_customer_id = ?,
+                    stripe_subscription_id = ?,
+                    updated_at = datetime('now')
+                WHERE id = ? AND (stripe_customer_id IS NULL OR stripe_customer_id = '')
+            """, (customer_id, subscription_id, org_id))
         conn.commit()
 
-    return (org_id, f"Checkout completed for org {org_id}, customer {customer_id}")
+    tier_msg = f", tier updated to {new_tier}" if new_tier else ""
+    return (org_id, f"Checkout completed for org {org_id}, customer {customer_id}{tier_msg}")
 
 
 def handle_customer_subscription_created(data: Dict[str, Any]) -> tuple[Optional[str], str]:

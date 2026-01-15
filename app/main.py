@@ -86,6 +86,8 @@ from app.routers.intelligence_export_api import router as intelligence_export_ro
 from app.routers.signals_prioritization_api import router as signals_prioritization_router
 from app.routers.entitlements_api import router as entitlements_router
 from app.routers.admin_actions_api import router as admin_actions_router
+from app.routers.billing_api import router as billing_api_router
+from app.routers.billing_status_api import router as billing_status_api_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -272,6 +274,10 @@ app.include_router(intelligence_export_router)
 app.include_router(signals_prioritization_router)
 # STEP 5 — Entitlements API (Tier Limits)
 app.include_router(entitlements_router)
+# STEP 8 — Billing API (Stripe Checkout)
+app.include_router(billing_api_router)
+# STEP 8 — Billing Status API (Read-Only)
+app.include_router(billing_status_api_router)
 
 
 @app.on_event("startup")
@@ -296,6 +302,10 @@ async def startup_event():
     # Step 15: Enforce approved run guardrail in production
     from app.guardrails import enforce_approved_run
     await run_in_threadpool(enforce_approved_run)
+
+    # STEP 8: Enforce Stripe secrets in production (fail-closed)
+    from app.guardrails.stripe_hardening import enforce_stripe_prod
+    await run_in_threadpool(enforce_stripe_prod)
 
     print(">> Initializing bookkeeping engine...")
     bookkeeper = await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
@@ -342,6 +352,9 @@ async def startup_event():
     print(">> BUILD 16: Plaid idempotency helpers ready (tx_identity_key)")
     print(">> INTELLIGENCE v1: Advisory-only endpoints active (categorization, duplicates, cashflow)")
     print(">> BUILD 28-30: Admin Actions API at /api/admin (diagnostics, fixes with approval flow)")
+    print(">> STEP 8: Billing API at /api/billing/create-checkout-session (Stripe Checkout)")
+    print(">> STEP 8: Billing Status API at /api/billing/status (read-only)")
+    print(">> STEP 8: Stripe prod hardening enforced (fail-closed if secrets missing)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
