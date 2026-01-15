@@ -52,6 +52,15 @@ TIER_LIMITS: Dict[str, TierLimits] = {
         intelligence_enabled=True,
         max_transactions_per_month=5000,
     ),
+    "govcon": TierLimits(
+        name="GovCon",
+        exports_enabled=True,
+        export_limit_per_day=100,
+        signals_depth=500,
+        summary_enabled=True,
+        intelligence_enabled=True,
+        max_transactions_per_month=10000,
+    ),
     "enterprise": TierLimits(
         name="Enterprise",
         exports_enabled=True,

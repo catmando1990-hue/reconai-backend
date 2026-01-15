@@ -175,7 +175,7 @@ def _log_billing_audit(
 # STEP 6: STRIPE PRICE → TIER MAPPING
 # =========================================================================
 
-# Map Stripe price IDs to ReconAI tiers (free/starter/pro/enterprise)
+# Map Stripe price IDs to ReconAI tiers (free/starter/pro/govcon/enterprise)
 # Configure these in environment or hardcode for production
 STRIPE_PRICE_TIER_MAP = {
     # Starter tier prices
@@ -184,6 +184,9 @@ STRIPE_PRICE_TIER_MAP = {
     # Pro tier prices
     os.getenv("STRIPE_PRICE_PRO_MONTHLY", "price_pro_monthly"): "pro",
     os.getenv("STRIPE_PRICE_PRO_YEARLY", "price_pro_yearly"): "pro",
+    # GovCon tier prices (Government Contractor compliance)
+    os.getenv("STRIPE_PRICE_GOVCON_MONTHLY", "price_govcon_monthly"): "govcon",
+    os.getenv("STRIPE_PRICE_GOVCON_YEARLY", "price_govcon_yearly"): "govcon",
     # Enterprise tier prices
     os.getenv("STRIPE_PRICE_ENTERPRISE_MONTHLY", "price_enterprise_monthly"): "enterprise",
     os.getenv("STRIPE_PRICE_ENTERPRISE_YEARLY", "price_enterprise_yearly"): "enterprise",
@@ -197,7 +200,7 @@ STRIPE_PRICE_TIER_MAP = {
 
 
 def _map_stripe_price_to_tier(price_id: str) -> str:
-    """Map Stripe price ID to ReconAI tier (free/starter/pro/enterprise)."""
+    """Map Stripe price ID to ReconAI tier (free/starter/pro/govcon/enterprise)."""
     return STRIPE_PRICE_TIER_MAP.get(price_id, "free")
 
 
@@ -287,6 +290,7 @@ def map_stripe_price_to_tier(price_id: str) -> SubscriptionTier:
         "free": SubscriptionTier.INDIVIDUAL,
         "starter": SubscriptionTier.FREELANCER,
         "pro": SubscriptionTier.SMALL_BUSINESS,
+        "govcon": SubscriptionTier.PROFESSIONAL,  # GovCon maps to Professional tier
         "enterprise": SubscriptionTier.ENTERPRISE,
     }
     return tier_enum_map.get(tier_str, SubscriptionTier.INDIVIDUAL)
