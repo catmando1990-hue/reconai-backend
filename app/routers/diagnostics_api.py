@@ -386,7 +386,7 @@ async def get_diagnostics_status(
     _require_view_access(ctx)
 
     request_id = _generate_request_id()
-    org_id = ctx.org_id or "default"
+    org_id = ctx["org_id"] or "default"
 
     agents = [
         {
@@ -455,7 +455,7 @@ async def run_diagnostic(
     _require_admin_access(ctx)
 
     request_id = _generate_request_id()
-    org_id = ctx.org_id or "default"
+    org_id = ctx["org_id"] or "default"
 
     # Rate limit check
     if _check_rate_limit(org_id):
@@ -552,7 +552,7 @@ async def get_last_diagnostic(
     _require_view_access(ctx)
 
     request_id = _generate_request_id()
-    org_id = ctx.org_id or "default"
+    org_id = ctx["org_id"] or "default"
 
     last_run = _get_last_run(org_id, agent)
 
