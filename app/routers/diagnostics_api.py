@@ -178,13 +178,41 @@ async def _run_health_checks() -> tuple[list, dict, str]:
     severity_counts = {"info": 0, "warning": 0, "critical": 0, "error": 0}
 
     # Check backend health (timeout 5s)
+    # Use internal URL for self-check: Render provides PORT, default to localhost:8000
+    port = os.getenv("PORT", "8000")
+    backend_url = f"http://127.0.0.1:{port}"
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             # Self-health check
-            backend_url = os.getenv("BACKEND_URL", "http://localhost:8000")
             try:
                 resp = await client.get(f"{backend_url}/health")
-                if resp.status_code != 200:
+                if resp.status_code == 200:
+                    data = resp.json()
+                    findings.append({
+                        "component": "Backend",
+                        "severity": "info",
+                        "message": f"Backend healthy (uptime: {data.get('uptime_seconds', 0):.0f}s)",
+                    })
+                    severity_counts["info"] += 1
+
+                    # Database connectivity check
+                    db_status = data.get("database", "unknown")
+                    if db_status == "connected":
+                        findings.append({
+                            "component": "Database",
+                            "severity": "info",
+                            "message": "Database connected",
+                        })
+                        severity_counts["info"] += 1
+                    else:
+                        findings.append({
+                            "component": "Database",
+                            "severity": "warning",
+                            "message": f"Database status: {db_status}",
+                        })
+                        severity_counts["warning"] += 1
+                else:
                     findings.append({
                         "component": "Backend",
                         "severity": "warning",
@@ -198,21 +226,6 @@ async def _run_health_checks() -> tuple[list, dict, str]:
                     "message": f"Cannot reach backend: {str(e)[:100]}",
                 })
                 severity_counts["error"] += 1
-
-            # Database connectivity (via health endpoint data)
-            try:
-                resp = await client.get(f"{backend_url}/health")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("database") != "ok":
-                        findings.append({
-                            "component": "Database",
-                            "severity": "warning",
-                            "message": "Database connection may be degraded",
-                        })
-                        severity_counts["warning"] += 1
-            except Exception:
-                pass
 
     except Exception as e:
         findings.append({
