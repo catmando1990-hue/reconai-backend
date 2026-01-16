@@ -2,14 +2,16 @@
 
 """Current user + organization context.
 
-Build 1 contract: GET /api/me returns { user, org, permissions }.
+Build 1 contract: GET /api/me returns { user, org, permissions, request_id }.
 
 - Auth is derived from Clerk JWT (Authorization: Bearer <token>)
 - Organization is derived from server-side context (never trusted from client input)
+- Auto-provisions personal workspace for new users (never 404s)
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
@@ -42,6 +44,7 @@ class MeOrg(BaseModel):
     tier: str
     subscription_status: Optional[str] = None
     features: List[str] = Field(default_factory=list)
+    is_personal_workspace: bool = False
 
 
 class MePermissions(BaseModel):
@@ -50,6 +53,7 @@ class MePermissions(BaseModel):
 
 
 class MeResponse(BaseModel):
+    request_id: str
     user: MeUser
     org: MeOrg
     permissions: MePermissions
@@ -73,6 +77,8 @@ def _to_user(u: User) -> MeUser:
 
 
 def _to_org(o: Organization, features: List[str]) -> MeOrg:
+    # Detect personal workspace by org ID prefix or slug prefix
+    is_personal = o.id.startswith("org-personal-") or o.slug.startswith("personal-")
     return MeOrg(
         id=o.id,
         name=o.name,
@@ -80,6 +86,7 @@ def _to_org(o: Organization, features: List[str]) -> MeOrg:
         tier=o.tier.value,
         subscription_status=o.subscription_status,
         features=features,
+        is_personal_workspace=is_personal,
     )
 
 
@@ -88,7 +95,15 @@ async def me(
     ctx: AuthContext = Depends(get_current_context),
     service: OrganizationService = Depends(get_org_service),
 ):
-    """Return authenticated user + active organization + effective permissions."""
+    """
+    Return authenticated user + active organization + effective permissions.
+
+    Auto-provisions personal workspace for new Clerk users.
+    Never returns 404 for valid authenticated users.
+
+    Response includes request_id for tracing.
+    """
+    request_id = str(uuid.uuid4())
 
     user = service.get_user(ctx["user_id"])
     org = service.get_organization(ctx["org_id"])
@@ -101,10 +116,11 @@ async def me(
         raise RuntimeError("Active organization not found")
 
     member = service.get_organization_member(org.id, user.id)
-    role = member.role.value if member else "viewer"
+    role = member.role.value if member else "owner"  # Default to owner for personal workspace
     perms = member.permissions if member and member.permissions else {}
 
     return MeResponse(
+        request_id=request_id,
         user=_to_user(user),
         org=_to_org(org, ctx.get("features", [])),
         permissions=MePermissions(role=role, permissions=perms),

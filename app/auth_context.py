@@ -120,6 +120,14 @@ async def get_current_identity(
     authorization: Optional[str] = Header(None),
     service: OrganizationService = Depends(get_org_service),
 ) -> AuthIdentity:
+    """
+    Resolve authenticated user identity from Clerk JWT.
+
+    Auto-provisions personal workspace for new users (never 404s for valid Clerk tokens).
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
     token = _parse_bearer_token(authorization)
     payload = verify_clerk_token(token)
 
@@ -138,18 +146,43 @@ async def get_current_identity(
     if not user:
         user = _lookup_user_by_clerk_id(service, clerk_user_id)
 
+    # AUTO-PROVISION: If user not found, create personal workspace
     if not user:
-        import logging
-        logging.warning(f"User not found - clerk_id: {clerk_user_id}, email: {email}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "error": "USER_NOT_FOUND",
-                "message": "User not found. Please complete signup.",
-                "clerk_user_id": clerk_user_id,
-                "email": email,
-            },
-        )
+        if not email:
+            # Cannot auto-provision without email
+            logger.warning(f"Cannot auto-provision user without email: clerk_id={clerk_user_id}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "EMAIL_REQUIRED",
+                    "message": "Email is required for account creation. Please update your Clerk profile.",
+                    "clerk_user_id": clerk_user_id,
+                },
+            )
+
+        logger.info(f"Auto-provisioning new user: clerk_id={clerk_user_id}, email={email}")
+
+        # Extract name from Clerk metadata if available
+        first_name = payload.get("given_name") or payload.get("first_name")
+        last_name = payload.get("family_name") or payload.get("last_name")
+
+        try:
+            user, _org = service.auto_provision_personal_user(
+                clerk_user_id=clerk_user_id,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+            )
+            logger.info(f"Auto-provisioned user {user.id} for clerk_id={clerk_user_id}")
+        except Exception as e:
+            logger.error(f"Auto-provision failed for {clerk_user_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "PROVISION_FAILED",
+                    "message": "Failed to create user account. Please try again.",
+                },
+            )
 
     if not user.is_active:
         raise HTTPException(

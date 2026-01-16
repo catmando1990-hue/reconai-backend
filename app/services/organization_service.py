@@ -238,6 +238,109 @@ class OrganizationService:
                 return self.get_user(row[0])
             return None
 
+    def auto_provision_personal_user(
+        self,
+        clerk_user_id: str,
+        email: str,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+    ) -> tuple[User, Organization]:
+        """
+        Auto-provision a new user with a personal workspace.
+
+        Called when a Clerk-authenticated user has no DB record.
+        Creates:
+        - User record linked to Clerk ID
+        - Personal workspace organization (tier=individual)
+        - Owner membership in personal workspace
+        - Default entity
+
+        Returns:
+            (user, personal_workspace_org)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Generate IDs
+        user_id = f"user-{uuid.uuid4().hex[:12]}"
+        org_id = f"org-personal-{uuid.uuid4().hex[:12]}"
+        member_id = f"member-{uuid.uuid4().hex[:12]}"
+        entity_id = f"entity-{uuid.uuid4().hex[:12]}"
+
+        # Personal workspace name
+        display_name = f"{first_name or ''} {last_name or ''}".strip() or email.split("@")[0]
+        workspace_name = f"{display_name}'s Workspace"
+        slug = f"personal-{clerk_user_id[:12]}"
+
+        # Get tier configuration for individual
+        tier_config = TIER_CONFIGS[SubscriptionTier.INDIVIDUAL]
+        features = tier_config["features"]
+        owner_permissions = ROLE_PERMISSIONS[UserRole.OWNER]
+
+        # Set trial period (14 days)
+        trial_ends_at = datetime.now() + timedelta(days=14)
+
+        logger.info(f"Auto-provisioning personal user: clerk_id={clerk_user_id}, email={email}")
+
+        with sqlite3.connect(self.db_path) as conn:
+            try:
+                # Create user record
+                conn.execute("""
+                    INSERT INTO users (
+                        id, email, password_hash, first_name, last_name,
+                        default_org_id, is_active, email_verified, user_id
+                    ) VALUES (?, ?, '', ?, ?, ?, 1, 1, ?)
+                """, (user_id, email, first_name, last_name, org_id, clerk_user_id))
+
+                # Create personal workspace organization
+                conn.execute("""
+                    INSERT INTO organizations (
+                        id, name, slug, tier, industry, subscription_status,
+                        trial_ends_at, features, owner_user_id
+                    ) VALUES (?, ?, ?, 'individual', 'general', 'trial', ?, ?, ?)
+                """, (
+                    org_id, workspace_name, slug,
+                    trial_ends_at.isoformat(), json.dumps(features.model_dump()),
+                    user_id
+                ))
+
+                # Add user as organization owner
+                conn.execute("""
+                    INSERT INTO organization_members (
+                        id, organization_id, user_id, role, permissions
+                    ) VALUES (?, ?, ?, 'owner', ?)
+                """, (
+                    member_id, org_id, user_id,
+                    json.dumps(owner_permissions.model_dump())
+                ))
+
+                # Create default entity
+                conn.execute("""
+                    INSERT INTO entities (
+                        id, organization_id, name, legal_name
+                    ) VALUES (?, ?, ?, ?)
+                """, (entity_id, org_id, "Personal", "Personal"))
+
+                conn.commit()
+                logger.info(f"Auto-provisioned user {user_id} with personal workspace {org_id}")
+
+            except sqlite3.IntegrityError as e:
+                # Handle race condition - user may have been created by another request
+                logger.warning(f"Auto-provision integrity error (may be race condition): {e}")
+                conn.rollback()
+                # Try to fetch the existing user
+                existing_user = self.get_user_by_email(email) or self.get_user_by_clerk_id(clerk_user_id)
+                if existing_user:
+                    orgs = self.list_user_organizations(existing_user.id)
+                    if orgs:
+                        return existing_user, orgs[0]
+                raise
+
+        # Return created objects
+        user = self.get_user(user_id)
+        org = self.get_organization(org_id)
+        return user, org
+
     def add_organization_member(
         self,
         org_id: str,
