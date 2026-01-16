@@ -135,13 +135,13 @@ class DiagnosticRunResponse(BaseModel):
 
 def _require_view_access(ctx: AuthContext):
     """Require at least view access (any authenticated user)."""
-    if not ctx.user_id:
+    if not ctx["user_id"]:
         raise HTTPException(status_code=401, detail="Authentication required")
 
 
 def _require_admin_access(ctx: AuthContext):
     """Require admin/manage_roles access for running diagnostics."""
-    if not ctx.user_id:
+    if not ctx["user_id"]:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     # Check Clerk metadata
