@@ -117,7 +117,8 @@ async def me(
 
     member = service.get_organization_member(org.id, user.id)
     role = member.role.value if member else "owner"  # Default to owner for personal workspace
-    perms = member.permissions if member and member.permissions else {}
+    # Convert Permissions model to dict for MePermissions
+    perms = member.permissions.model_dump() if member and member.permissions else {}
 
     return MeResponse(
         request_id=request_id,
