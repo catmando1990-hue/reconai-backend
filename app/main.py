@@ -115,6 +115,8 @@ from app.routers.funnel_attribution_api import router as funnel_attribution_rout
 from app.routers.killswitch_api import router as killswitch_router
 from app.routers.billing_reconcile_api import router as billing_reconcile_router
 from app.routers.platform_hardening_api import router as platform_hardening_router
+# STEP A — AI-Powered Diagnostics API (Admin-Only, Manual-Run)
+from app.routers.diagnostics_api import router as diagnostics_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -359,6 +361,8 @@ app.include_router(killswitch_router)
 app.include_router(billing_reconcile_router)
 # STEP 26 — Platform Hardening API (Read-Only)
 app.include_router(platform_hardening_router)
+# STEP A — AI-Powered Diagnostics API (Admin-Only, Manual-Run, Confirmation Phrases)
+app.include_router(diagnostics_router)
 
 
 @app.on_event("startup")
@@ -468,6 +472,7 @@ async def startup_event():
     print(">> STEP 24: Kill-Switch at /api/killswitch (feature toggles, fail-closed enforcement)")
     print(">> STEP 25: Billing Reconcile at /api/billing/reconcile (billing↔entitlement drift detection)")
     print(">> STEP 26: Platform Hardening at /api/platform/hardening (rate limits, size caps, timeouts)")
+    print(">> STEP A: Diagnostics API at /api/diagnostics (admin-only, manual-run, confirmation phrases, 5/min/org)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
