@@ -7,6 +7,7 @@ POST /api/billing/sync - Reconcile local tier with Stripe subscription state.
 - Stripe is source of truth
 - No background jobs - manual invocation only
 - Audit logged for compliance
+- RBAC: sync_billing permission required
 """
 
 import os
@@ -19,10 +20,11 @@ from typing import Optional
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
+from .billing_rbac import get_billing_actor, require_billing_permission
 
 router = APIRouter(tags=["billing"])
 
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+# Note: stripe.api_key is set per-request in endpoint handlers for fail-closed LAW 5 compliance
 
 # Tier mapping from Stripe price IDs
 PRICE_TO_TIER = {
@@ -129,8 +131,36 @@ async def billing_sync(
     - Stripe is source of truth
     - Updates local tier/status to match Stripe subscription
     - Audit logged for compliance
+    - RBAC: sync_billing permission required (owner, billing_admin)
     """
     request_id = str(uuid4())
+
+    # RBAC check: sync_billing requires owner or billing_admin
+    actor = get_billing_actor(ctx["user_id"], ctx["org_id"])
+    require_billing_permission(actor, "sync_billing", request_id)
+
+    # LAW 5: Fail-closed in production if Stripe secrets missing
+    stripe_secret = os.getenv("STRIPE_SECRET_KEY")
+    if not stripe_secret:
+        env = os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("NODE_ENV")
+        if env == "production":
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "STRIPE_NOT_CONFIGURED",
+                    "message": "Stripe API key not configured",
+                    "request_id": request_id,
+                }
+            )
+        # Dev mode: return stub
+        return {
+            "org_id": ctx["org_id"],
+            "status": "stripe_not_configured",
+            "synced": False,
+            "request_id": request_id,
+            "notes": "Stripe API key not configured (dev mode)",
+        }
+    stripe.api_key = stripe_secret
 
     # Get org's Stripe customer ID
     with sqlite3.connect(DB_PATH) as conn:

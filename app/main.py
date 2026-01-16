@@ -90,6 +90,31 @@ from app.routers.billing_api import router as billing_api_router
 from app.routers.billing_status_api import router as billing_status_api_router
 from app.routers.billing_sync_api import router as billing_sync_api_router
 from app.routers.billing_safeguards_api import router as billing_safeguards_api_router
+from app.routers.billing_invoices_api import router as billing_invoices_api_router
+from app.routers.billing_role_management_api import router as billing_role_management_api_router
+from app.routers.billing_invoice_export_api import router as billing_invoice_export_api_router
+from app.routers.billing_governance_ui_support import router as billing_governance_ui_router
+from app.routers.billing_financial_controls_api import router as billing_financial_controls_router
+from app.routers.billing_data_retention_api import router as billing_data_retention_router
+from app.routers.billing_erp_exports_api import router as billing_erp_exports_router
+from app.routers.investor_reporting_api import router as investor_reporting_router
+from app.routers.compliance_automation_api import router as compliance_automation_router
+from app.routers.security_trust_api import router as security_trust_router
+from app.routers.ai_financial_intelligence_api import router as ai_financial_intelligence_router
+from app.routers.gtm_pricing_api import router as gtm_pricing_router
+from app.routers.production_readiness_api import router as production_readiness_router
+from app.routers.ml_governance_api import router as ml_governance_router
+from app.routers.onboarding_api import router as onboarding_api_router
+from app.routers.capabilities_api import router as capabilities_router
+from app.routers.activation_metrics_api import router as activation_metrics_router
+from app.routers.investor_export_api import router as investor_export_router
+from app.routers.activation_benchmarks_api import router as activation_benchmarks_router
+from app.routers.investor_audit_api import router as investor_audit_router
+from app.routers.org_governance_api import router as org_governance_router
+from app.routers.funnel_attribution_api import router as funnel_attribution_router
+from app.routers.killswitch_api import router as killswitch_router
+from app.routers.billing_reconcile_api import router as billing_reconcile_router
+from app.routers.platform_hardening_api import router as platform_hardening_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -284,6 +309,56 @@ app.include_router(billing_status_api_router)
 app.include_router(billing_sync_api_router)
 # STEP 8 — Billing Safeguards API (Cancel/Downgrade)
 app.include_router(billing_safeguards_api_router)
+# STEP 9 — Billing Invoices API (Read-Only, Stripe)
+app.include_router(billing_invoices_api_router)
+# STEP 10 — Billing Role Management API (Manual)
+app.include_router(billing_role_management_api_router)
+# STEP 10 — Billing Invoice Export API (Manual)
+app.include_router(billing_invoice_export_api_router)
+# STEP 11 — Billing Governance UI Support (Read-Only)
+app.include_router(billing_governance_ui_router)
+# STEP 11 — Billing Financial Controls API (Soft Limits, Alerts)
+app.include_router(billing_financial_controls_router)
+# STEP 11 — Billing Data Retention API (Export/Delete with Audit Seal)
+app.include_router(billing_data_retention_router)
+# STEP 11 — Billing ERP Exports API (Manual, CSV)
+app.include_router(billing_erp_exports_router)
+# STEP 12 — Investor Reporting API (Read-Only)
+app.include_router(investor_reporting_router)
+# STEP 12 — Compliance Automation API (Read-Only)
+app.include_router(compliance_automation_router)
+# STEP 12 — Security & Trust API (Read-Only)
+app.include_router(security_trust_router)
+# STEP 12 — AI Financial Intelligence API (Read-Only)
+app.include_router(ai_financial_intelligence_router)
+# STEP 13 — GTM & Pricing API (Read-Only)
+app.include_router(gtm_pricing_router)
+# STEP 13 — Production Readiness API (Read-Only)
+app.include_router(production_readiness_router)
+# STEP 13 — ML Governance API (Read-Only)
+app.include_router(ml_governance_router)
+# STEP 13 — Onboarding API (Manual)
+app.include_router(onboarding_api_router)
+# STEP 14A — Capability Gating API (Read-Only)
+app.include_router(capabilities_router)
+# STEP 14B — Activation Metrics API (Read-Only)
+app.include_router(activation_metrics_router)
+# STEP 16 — Investor Export API (Read-Only)
+app.include_router(investor_export_router)
+# STEP 17 — Activation Benchmarks API (Read-Only)
+app.include_router(activation_benchmarks_router)
+# STEP 21 — Investor Audit Trail & Export Receipts (Read-Only)
+app.include_router(investor_audit_router)
+# STEP 22 — Org-Level Governance Dashboard (Read-Only)
+app.include_router(org_governance_router)
+# STEP 23 — Activation → Revenue Funnel Attribution (Read-Only)
+app.include_router(funnel_attribution_router)
+# STEP 24 — Kill-Switch Status API (Read-Only)
+app.include_router(killswitch_router)
+# STEP 25 — Billing Reconciliation API (Read-Only)
+app.include_router(billing_reconcile_router)
+# STEP 26 — Platform Hardening API (Read-Only)
+app.include_router(platform_hardening_router)
 
 
 @app.on_event("startup")
@@ -363,6 +438,36 @@ async def startup_event():
     print(">> STEP 8: Billing Sync API at /api/billing/sync (manual reconciliation)")
     print(">> STEP 8: Billing Safeguards at /api/billing/cancel, /api/billing/downgrade (scheduled, not immediate)")
     print(">> STEP 8: Stripe prod hardening enforced (fail-closed if secrets missing)")
+    print(">> STEP 9: Billing Invoices API at /api/billing/invoices (read-only, Stripe source)")
+    print(">> STEP 9: Enterprise RBAC enforced on all billing endpoints")
+    print(">> STEP 10: Billing Role Management at /api/billing/roles (manual, owner/billing_admin)")
+    print(">> STEP 10: Invoice Export at /api/billing/invoices/export (manual, read-only)")
+    print(">> STEP 10: Stripe linkage validation enforced")
+    print(">> STEP 11: Governance UI Support at /api/billing/governance (read-only filters, diffs, export history)")
+    print(">> STEP 11: Financial Controls at /api/billing/controls (soft limits, approval thresholds, alerts)")
+    print(">> STEP 11: Data Retention at /api/billing/retention (right-to-export, right-to-delete, audit sealed)")
+    print(">> STEP 11: ERP Exports at /api/billing/erp (NetSuite/QuickBooks CSV, manual trigger only)")
+    print(">> STEP 12: Investor Reporting at /api/investor (GAAP summaries, board-ready exports, read-only)")
+    print(">> STEP 12: Compliance Automation at /api/compliance (DCAA, SF-1408, gap analysis, read-only)")
+    print(">> STEP 12: Security & Trust at /api/security (SOC 2 tracker, evidence vault, trust artifacts)")
+    print(">> STEP 12: AI Financial Intelligence at /api/ai (NL queries, insights, forecasting, read-only)")
+    print(">> STEP 13: GTM Pricing at /api/gtm (tiers, features, upgrade paths, demo metadata)")
+    print(">> STEP 13: Production Readiness at /api/production (SLOs, error budgets, runbooks, load tests)")
+    print(">> STEP 13: ML Governance at /api/ml (models, evaluations, drift, prompts)")
+    print(">> STEP 13: Onboarding at /api/onboarding (setup, checklists, sample data, first-run insights)")
+    print(">> STEP 14A: Capabilities at /api/entitlements/capabilities (central tier, features, limits)")
+    print(">> STEP 14B: Activation Metrics at /api/metrics/activation (time-to-first-value, read-only)")
+    print(">> STEP 16: Investor Export at /api/investor/export (JSON/PDF snapshots, read-only)")
+    print(">> STEP 17: Activation Benchmarks at /api/benchmarks (percentiles, cohorts, read-only)")
+    print(">> STEP 18: Investor Export Hardening (allowlist, PII redaction, rate limits, watermark)")
+    print(">> STEP 19: Benchmark Quality Controls (min cohort size, insufficient_data states)")
+    print(">> STEP 20: Upgrade UX Wiring (manual navigation to Stripe upgrade flow)")
+    print(">> STEP 21: Investor Audit at /api/investor/audit (receipts, export trail, integrity hashes)")
+    print(">> STEP 22: Org Governance at /api/org/governance (compliance, access controls, data policies)")
+    print(">> STEP 23: Funnel Attribution at /api/funnel (activation→revenue, conversion rates, attribution)")
+    print(">> STEP 24: Kill-Switch at /api/killswitch (feature toggles, fail-closed enforcement)")
+    print(">> STEP 25: Billing Reconcile at /api/billing/reconcile (billing↔entitlement drift detection)")
+    print(">> STEP 26: Platform Hardening at /api/platform/hardening (rate limits, size caps, timeouts)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 

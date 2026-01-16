@@ -11,6 +11,7 @@ SAFEGUARDS:
 - Grace period until end of billing period
 - Stripe handles actual mutation at period end
 - Full audit logging
+- RBAC: cancel/downgrade permissions required (owner, billing_admin)
 """
 
 import os
@@ -24,10 +25,11 @@ from typing import Optional
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
+from .billing_rbac import get_billing_actor, require_billing_permission
 
 router = APIRouter(tags=["billing"])
 
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+# Note: stripe.api_key is set per-request in endpoint handlers for fail-closed LAW 5 compliance
 
 # Tier hierarchy for downgrade validation
 TIER_HIERARCHY = ["free", "starter", "pro", "govcon", "enterprise"]
@@ -89,19 +91,31 @@ async def cancel_subscription(
     """
     request_id = str(uuid4())
 
-    # Check permissions
-    permissions = ctx.get("permissions", {})
-    if not permissions.get("can_manage_billing", False):
-        # Allow owner
-        if permissions.get("role") != "owner":
+    # RBAC check: cancel requires owner or billing_admin
+    actor = get_billing_actor(ctx["user_id"], ctx["org_id"])
+    require_billing_permission(actor, "cancel", request_id)
+
+    # LAW 5: Fail-closed in production if Stripe secrets missing
+    stripe_secret = os.getenv("STRIPE_SECRET_KEY")
+    if not stripe_secret:
+        env = os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("NODE_ENV")
+        if env == "production":
             raise HTTPException(
-                status_code=403,
+                status_code=503,
                 detail={
-                    "error": "FORBIDDEN",
-                    "message": "Billing management permission required",
-                    "request_id": request_id
+                    "error": "STRIPE_NOT_CONFIGURED",
+                    "message": "Stripe API key not configured",
+                    "request_id": request_id,
                 }
             )
+        # Dev mode: return stub
+        return {
+            "org_id": ctx["org_id"],
+            "action": "no_action",
+            "message": "Stripe not configured (dev mode)",
+            "request_id": request_id,
+        }
+    stripe.api_key = stripe_secret
 
     # Get current subscription
     sub_info = _get_org_subscription(ctx["org_id"])
@@ -189,18 +203,31 @@ async def downgrade_subscription(
             }
         )
 
-    # Check permissions
-    permissions = ctx.get("permissions", {})
-    if not permissions.get("can_manage_billing", False):
-        if permissions.get("role") != "owner":
+    # RBAC check: downgrade requires owner or billing_admin
+    actor = get_billing_actor(ctx["user_id"], ctx["org_id"])
+    require_billing_permission(actor, "downgrade", request_id)
+
+    # LAW 5: Fail-closed in production if Stripe secrets missing
+    stripe_secret = os.getenv("STRIPE_SECRET_KEY")
+    if not stripe_secret:
+        env = os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("NODE_ENV")
+        if env == "production":
             raise HTTPException(
-                status_code=403,
+                status_code=503,
                 detail={
-                    "error": "FORBIDDEN",
-                    "message": "Billing management permission required",
-                    "request_id": request_id
+                    "error": "STRIPE_NOT_CONFIGURED",
+                    "message": "Stripe API key not configured",
+                    "request_id": request_id,
                 }
             )
+        # Dev mode: return stub
+        return {
+            "org_id": ctx["org_id"],
+            "action": "no_action",
+            "message": "Stripe not configured (dev mode)",
+            "request_id": request_id,
+        }
+    stripe.api_key = stripe_secret
 
     # Get current subscription
     sub_info = _get_org_subscription(ctx["org_id"])

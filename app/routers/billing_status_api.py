@@ -6,6 +6,7 @@ GET /api/billing/status - Returns current organization billing status.
 - Auth via get_current_context (Depends injection)
 - Read-only (no mutations)
 - Structured response with request_id
+- RBAC: view_status permission required (all roles)
 """
 
 import os
@@ -16,6 +17,7 @@ from typing import Optional
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
+from .billing_rbac import get_billing_actor, require_billing_permission
 
 router = APIRouter(tags=["billing"])
 
@@ -68,8 +70,13 @@ async def billing_status(
 
     Read-only endpoint - no mutations.
     Returns tier, subscription status, and billing interval.
+    RBAC: view_status permission (all authenticated users).
     """
     request_id = str(uuid4())
+
+    # RBAC check: view_status is allowed for all roles
+    actor = get_billing_actor(ctx["user_id"], ctx["org_id"])
+    require_billing_permission(actor, "view_status", request_id)
 
     billing = _get_billing_status(ctx["org_id"])
 
@@ -81,6 +88,7 @@ async def billing_status(
         "stripe_customer_id": billing["stripe_customer_id"],
         "subscription_id": billing["stripe_subscription_id"],
         "current_period_end": billing["current_period_end"],
+        "renewal_date": billing["current_period_end"],  # Alias for frontend compatibility
         "source": "stripe",
         "request_id": request_id,
     }
