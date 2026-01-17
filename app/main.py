@@ -123,6 +123,8 @@ from app.routers.govcon_timekeeping import router as govcon_timekeeping_router
 from app.routers.govcon_indirects import router as govcon_indirects_router
 from app.routers.govcon_reconciliation import router as govcon_reconciliation_router
 from app.routers.govcon_audit import router as govcon_audit_router
+# DASHBOARD — Main Dashboard Overview API
+from app.routers.dashboard_overview import router as dashboard_overview_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -375,6 +377,8 @@ app.include_router(govcon_timekeeping_router)
 app.include_router(govcon_indirects_router)
 app.include_router(govcon_reconciliation_router)
 app.include_router(govcon_audit_router)
+# DASHBOARD — Main Dashboard Overview API (Read-Only, Manual-Refresh)
+app.include_router(dashboard_overview_router)
 
 
 @app.on_event("startup")
@@ -490,6 +494,7 @@ async def startup_event():
     print(">> GOVCON: Indirects API at /govcon/indirects (pools, rates, allowability per FAR 31.201)")
     print(">> GOVCON: Reconciliation API at /govcon/reconciliation (ICS, SF-1408, variance analysis)")
     print(">> GOVCON: Audit API at /govcon/audit (immutable trail, hash chain integrity, 6-year retention)")
+    print(">> DASHBOARD: Overview API at /api/dashboard/overview (CFO snapshot, read-only, manual-refresh)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 

@@ -618,5 +618,29 @@ def init_db() -> None:
             )
         """)
 
+        # =================================================================
+        # GOVCON: APPEND-ONLY AUDIT EVENTS (DCAA Compliance)
+        # =================================================================
+        # This table is APPEND-ONLY. No UPDATE/DELETE operations are permitted.
+        # Hash chaining ensures tamper-evidence (each event references prior hash).
+        # Retention: 6 years per FAR requirements.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                actor_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT,
+                payload TEXT NOT NULL,
+                prev_hash TEXT,
+                event_hash TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_entity ON audit_events(entity_type, entity_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_type ON audit_events(event_type)")
+
         conn.commit()
         print("Multi-tenancy database tables created")

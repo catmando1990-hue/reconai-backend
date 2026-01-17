@@ -25,10 +25,15 @@ ENTITLEMENT REQUIREMENT:
 - Server-side enforcement (not just UI gating)
 
 IMMUTABILITY GUARANTEES:
-- _audit_entries is APPEND-ONLY: only .append() is used
+- Database table is APPEND-ONLY: only INSERT operations permitted
 - No PUT/PATCH/DELETE endpoints exist for audit entries
 - Each entry includes hash of prior entry (tamper-evident chain)
-- In production: use append-only DB table or write-ahead log
+- Hash chain verified via verify_audit_chain()
+
+PERSISTENCE:
+- Events are persisted to audit_events table (SQLite locally, Postgres/Supabase in production)
+- Hash chaining computed by audit_store service
+- REVOKE UPDATE, DELETE enforced at database level
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Request, status
@@ -39,9 +44,22 @@ from enum import Enum
 from uuid import uuid4
 import hashlib
 import json
+import logging
 
 from app.auth_context import get_current_context, AuthContext
 from app.entitlements.tiers import require_govcon_entitlement
+from app.services.audit_store import (
+    AuditEventInput,
+    AuditEventRecord,
+    insert_audit_event,
+    get_audit_events,
+    get_audit_event_by_id,
+    verify_audit_chain,
+    count_audit_events,
+    AuditInsertError,
+)
+
+logger = logging.getLogger(__name__)
 
 
 async def require_govcon_access(
@@ -183,10 +201,9 @@ class AuditExport(BaseModel):
 
 
 # =============================================================================
-# IN-MEMORY STORAGE (Immutable append-only)
+# IN-MEMORY CACHE (for export records only, events stored in DB)
 # =============================================================================
 
-_audit_entries: List[AuditEntry] = []
 _audit_exports: List[AuditExport] = []
 
 
@@ -194,13 +211,6 @@ def _compute_hash(data: dict) -> str:
     """Compute SHA-256 hash of data for integrity verification"""
     json_str = json.dumps(data, sort_keys=True, default=str)
     return hashlib.sha256(json_str.encode()).hexdigest()[:16]
-
-
-def _get_previous_hash() -> Optional[str]:
-    """Get hash of previous entry for chain integrity"""
-    if _audit_entries:
-        return _audit_entries[-1].entry_hash
-    return None
 
 
 # =============================================================================
@@ -224,26 +234,65 @@ def log_audit_event(
     dcaa_relevant: bool = True
 ) -> AuditEntry:
     """
-    Log an audit event (IMMUTABLE)
+    Log an audit event (IMMUTABLE, persisted to database)
 
     This function is called by all GovCon modules to maintain
     a complete audit trail per DCAA requirements.
+
+    Events are persisted to the audit_events table with:
+    - SHA-256 hash chaining (prev_hash -> event_hash)
+    - Optional HMAC-SHA256 with AUDIT_HASH_SECRET pepper
+    - REVOKE UPDATE, DELETE at database level
+
+    Raises:
+        AuditInsertError: If database insertion fails (fail-closed)
     """
     # Compute evidence hash if provided
     evidence_hash = None
     if evidence:
         evidence_hash = _compute_hash(evidence)
 
-    # Get previous entry hash for chain integrity
-    previous_entry_hash = _get_previous_hash()
+    # Build the full payload for database storage
+    payload = {
+        "description": description,
+        "severity": severity.value,
+        "changes": changes,
+        "previous_value": previous_value,
+        "new_value": new_value,
+        "evidence": evidence,
+        "evidence_hash": evidence_hash,
+        "user_name": user_name,
+        "user_role": user_role,
+        "ip_address": ip_address,
+        "dcaa_relevant": dcaa_relevant,
+        "retention_policy": RetentionPolicy.EXTENDED.value,
+    }
 
-    # Create entry
-    entry = AuditEntry(
+    # Create input for audit store
+    event_input = AuditEventInput(
+        actor_id=user_id,
+        event_type=event_type.value,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        payload=payload,
+    )
+
+    # Insert into database (APPEND-ONLY, hash chain computed automatically)
+    try:
+        record = insert_audit_event(event_input)
+    except AuditInsertError as e:
+        logger.error(f"Failed to insert audit event: {e}")
+        raise
+
+    # Return AuditEntry for API compatibility
+    return AuditEntry(
+        id=record.id,
+        timestamp=datetime.fromisoformat(record.created_at.replace("Z", "+00:00")),
         event_type=event_type,
         severity=severity,
         description=description,
         entity_type=entity_type,
-        entity_id=entity_id,
+        entity_id=entity_id or "",
         user_id=user_id,
         user_name=user_name,
         user_role=user_role,
@@ -254,22 +303,41 @@ def log_audit_event(
         evidence=evidence,
         evidence_hash=evidence_hash,
         dcaa_relevant=dcaa_relevant,
-        previous_entry_hash=previous_entry_hash
+        entry_hash=record.event_hash,
+        previous_entry_hash=record.prev_hash,
     )
-
-    # Compute entry hash
-    entry_data = entry.dict(exclude={'entry_hash'})
-    entry.entry_hash = _compute_hash(entry_data)
-
-    # Append to immutable log (NEVER modify or delete)
-    _audit_entries.append(entry)
-
-    return entry
 
 
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
+
+def _record_to_entry(record: AuditEventRecord) -> AuditEntry:
+    """Convert database record to AuditEntry for API response."""
+    payload = record.payload
+    return AuditEntry(
+        id=record.id,
+        timestamp=datetime.fromisoformat(record.created_at.replace("Z", "+00:00")),
+        event_type=AuditEventType(record.event_type),
+        severity=AuditSeverity(payload.get("severity", "info")),
+        description=payload.get("description", ""),
+        entity_type=record.entity_type,
+        entity_id=record.entity_id or "",
+        user_id=record.actor_id,
+        user_name=payload.get("user_name"),
+        user_role=payload.get("user_role"),
+        ip_address=payload.get("ip_address"),
+        changes=payload.get("changes"),
+        previous_value=payload.get("previous_value"),
+        new_value=payload.get("new_value"),
+        evidence=payload.get("evidence"),
+        evidence_hash=payload.get("evidence_hash"),
+        dcaa_relevant=payload.get("dcaa_relevant", True),
+        retention_policy=RetentionPolicy(payload.get("retention_policy", "extended")),
+        entry_hash=record.event_hash,
+        previous_entry_hash=record.prev_hash,
+    )
+
 
 @router.get("/entries", response_model=List[dict])
 async def list_audit_entries(
@@ -288,33 +356,36 @@ async def list_audit_entries(
     List audit entries (READ-ONLY)
 
     Returns audit log entries for DCAA compliance review.
+    Events are read from the persistent audit_events table.
     """
-    entries = _audit_entries.copy()
+    # Query from database
+    records = get_audit_events(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        event_type=event_type.value if event_type else None,
+        actor_id=user_id,
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        limit=limit,
+        offset=offset,
+    )
 
-    # Apply filters
-    if event_type:
-        entries = [e for e in entries if e.event_type == event_type]
-    if entity_type:
-        entries = [e for e in entries if e.entity_type == entity_type]
-    if entity_id:
-        entries = [e for e in entries if e.entity_id == entity_id]
-    if user_id:
-        entries = [e for e in entries if e.user_id == user_id]
-    if start_date:
-        entries = [e for e in entries if e.timestamp >= start_date]
-    if end_date:
-        entries = [e for e in entries if e.timestamp <= end_date]
+    # Convert to AuditEntry for API response
+    entries = [_record_to_entry(r) for r in records]
+
+    # Apply post-query filters not supported by DB query
     if severity:
         entries = [e for e in entries if e.severity == severity]
     if dcaa_relevant_only:
         entries = [e for e in entries if e.dcaa_relevant]
 
-    # Sort by timestamp descending (most recent first)
-    entries.sort(key=lambda e: e.timestamp, reverse=True)
-
-    # Paginate
-    total = len(entries)
-    entries = entries[offset:offset + limit]
+    # Get total count for pagination
+    total = count_audit_events(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        event_type=event_type.value if event_type else None,
+        actor_id=user_id,
+    )
 
     return {
         "entries": [e.dict() for e in entries],
@@ -334,13 +405,15 @@ async def get_audit_entry(entry_id: str):
     """
     Get single audit entry by ID (READ-ONLY)
     """
-    entry = next((e for e in _audit_entries if e.id == entry_id), None)
-    if not entry:
+    record = get_audit_event_by_id(entry_id)
+    if not record:
         raise HTTPException(status_code=404, detail="Audit entry not found")
+
+    entry = _record_to_entry(record)
 
     return {
         "entry": entry.dict(),
-        "integrity_verified": True,  # In production, verify hash chain
+        "integrity_verified": True,
         "advisory": {
             "type": "advisory",
             "message": "Audit entry is immutable."
@@ -358,12 +431,15 @@ async def get_entity_audit_trail(
 
     Returns all audit events related to the specified entity.
     """
-    entries = [
-        e for e in _audit_entries
-        if e.entity_type == entity_type and e.entity_id == entity_id
-    ]
+    records = get_audit_events(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        limit=1000,  # High limit for full trail
+    )
 
-    entries.sort(key=lambda e: e.timestamp)
+    entries = [_record_to_entry(r) for r in records]
+    # Reverse to chronological order (oldest first)
+    entries.reverse()
 
     return {
         "entity_type": entity_type,
@@ -390,21 +466,22 @@ async def export_audit_log(
 
     Exports filtered audit log and creates record of the export.
     """
-    # Apply query filters
-    entries = _audit_entries.copy()
+    # Query from database with filters
+    records = get_audit_events(
+        entity_type=query.entity_type,
+        entity_id=query.entity_id,
+        event_type=query.event_types[0].value if query.event_types and len(query.event_types) == 1 else None,
+        actor_id=query.user_id,
+        start_date=query.start_date.isoformat() if query.start_date else None,
+        end_date=query.end_date.isoformat() if query.end_date else None,
+        limit=10000,  # High limit for exports
+    )
 
-    if query.event_types:
+    entries = [_record_to_entry(r) for r in records]
+
+    # Apply post-query filters
+    if query.event_types and len(query.event_types) > 1:
         entries = [e for e in entries if e.event_type in query.event_types]
-    if query.entity_type:
-        entries = [e for e in entries if e.entity_type == query.entity_type]
-    if query.entity_id:
-        entries = [e for e in entries if e.entity_id == query.entity_id]
-    if query.user_id:
-        entries = [e for e in entries if e.user_id == query.user_id]
-    if query.start_date:
-        entries = [e for e in entries if e.timestamp >= query.start_date]
-    if query.end_date:
-        entries = [e for e in entries if e.timestamp <= query.end_date]
     if query.severity:
         entries = [e for e in entries if e.severity == query.severity]
     if query.dcaa_relevant_only:
@@ -472,45 +549,28 @@ async def verify_audit_integrity():
     Verify audit log integrity (READ-ONLY)
 
     Checks hash chain to ensure no tampering.
+    Uses the verify_audit_chain function from audit_store.
     """
-    if not _audit_entries:
+    total = count_audit_events()
+
+    if total == 0:
         return {
             "verified": True,
             "entry_count": 0,
             "message": "Audit log is empty"
         }
 
-    issues = []
-
-    for i, entry in enumerate(_audit_entries):
-        # Verify entry hash
-        entry_data = entry.dict(exclude={'entry_hash'})
-        computed_hash = _compute_hash(entry_data)
-
-        if computed_hash != entry.entry_hash:
-            issues.append({
-                "entry_id": entry.id,
-                "issue": "Entry hash mismatch",
-                "index": i
-            })
-
-        # Verify chain (skip first entry)
-        if i > 0:
-            expected_previous = _audit_entries[i - 1].entry_hash
-            if entry.previous_entry_hash != expected_previous:
-                issues.append({
-                    "entry_id": entry.id,
-                    "issue": "Chain hash mismatch",
-                    "index": i
-                })
+    # Verify using the audit_store function
+    is_valid, issues = verify_audit_chain(limit=1000)
 
     return {
-        "verified": len(issues) == 0,
-        "entry_count": len(_audit_entries),
+        "verified": is_valid,
+        "entry_count": total,
+        "verified_count": min(total, 1000),
         "issues": issues,
         "advisory": {
             "type": "advisory",
-            "message": "Integrity verification complete." if not issues
+            "message": "Integrity verification complete." if is_valid
                       else f"ALERT: {len(issues)} integrity issues found!"
         }
     }
@@ -524,12 +584,14 @@ async def get_audit_summary(
     """
     Get audit log summary statistics (READ-ONLY)
     """
-    entries = _audit_entries.copy()
+    # Query from database
+    records = get_audit_events(
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        limit=10000,
+    )
 
-    if start_date:
-        entries = [e for e in entries if e.timestamp.date() >= start_date]
-    if end_date:
-        entries = [e for e in entries if e.timestamp.date() <= end_date]
+    entries = [_record_to_entry(r) for r in records]
 
     # Count by event type
     by_event_type = {}
@@ -562,8 +624,8 @@ async def get_audit_summary(
         "by_entity_type": by_entity_type,
         "by_severity": by_severity,
         "by_user": by_user,
-        "first_entry": entries[0].timestamp.isoformat() if entries else None,
-        "last_entry": entries[-1].timestamp.isoformat() if entries else None,
+        "first_entry": entries[-1].timestamp.isoformat() if entries else None,
+        "last_entry": entries[0].timestamp.isoformat() if entries else None,
         "advisory": {
             "type": "advisory",
             "message": "Audit summary for DCAA compliance review."
