@@ -117,6 +117,12 @@ from app.routers.billing_reconcile_api import router as billing_reconcile_router
 from app.routers.platform_hardening_api import router as platform_hardening_router
 # STEP A — AI-Powered Diagnostics API (Admin-Only, Manual-Run)
 from app.routers.diagnostics_api import router as diagnostics_router
+# GOVCON — DCAA-Compliant Government Contracting Modules
+from app.routers.govcon_contracts import router as govcon_contracts_router
+from app.routers.govcon_timekeeping import router as govcon_timekeeping_router
+from app.routers.govcon_indirects import router as govcon_indirects_router
+from app.routers.govcon_reconciliation import router as govcon_reconciliation_router
+from app.routers.govcon_audit import router as govcon_audit_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -363,6 +369,12 @@ app.include_router(billing_reconcile_router)
 app.include_router(platform_hardening_router)
 # STEP A — AI-Powered Diagnostics API (Admin-Only, Manual-Run, Confirmation Phrases)
 app.include_router(diagnostics_router)
+# GOVCON — DCAA-Compliant Government Contracting (GovCon/Enterprise tiers only)
+app.include_router(govcon_contracts_router)
+app.include_router(govcon_timekeeping_router)
+app.include_router(govcon_indirects_router)
+app.include_router(govcon_reconciliation_router)
+app.include_router(govcon_audit_router)
 
 
 @app.on_event("startup")
@@ -473,6 +485,11 @@ async def startup_event():
     print(">> STEP 25: Billing Reconcile at /api/billing/reconcile (billing↔entitlement drift detection)")
     print(">> STEP 26: Platform Hardening at /api/platform/hardening (rate limits, size caps, timeouts)")
     print(">> STEP A: Diagnostics API at /api/diagnostics (admin-only, manual-run, confirmation phrases, 5/min/org)")
+    print(">> GOVCON: Contracts API at /govcon/contracts (DCAA-compliant, advisory-only)")
+    print(">> GOVCON: Timekeeping API at /govcon/timekeeping (labor tracking, corrections require evidence)")
+    print(">> GOVCON: Indirects API at /govcon/indirects (pools, rates, allowability per FAR 31.201)")
+    print(">> GOVCON: Reconciliation API at /govcon/reconciliation (ICS, SF-1408, variance analysis)")
+    print(">> GOVCON: Audit API at /govcon/audit (immutable trail, hash chain integrity, 6-year retention)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 

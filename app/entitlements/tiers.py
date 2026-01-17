@@ -171,3 +171,57 @@ def require_entitlement(
         )
 
     return get_tier_limits(tier)
+
+
+# =============================================================================
+# GOVCON ENTITLEMENT CHECK
+# =============================================================================
+
+GOVCON_ENTITLED_TIERS = {"govcon", "contractor", "enterprise"}
+
+
+def has_govcon_entitlement(tier: str) -> bool:
+    """
+    Check if tier has GovCon module access.
+    Canonical safe default: deny until explicitly granted.
+    """
+    if not tier:
+        return False
+    return tier.lower() in GOVCON_ENTITLED_TIERS
+
+
+def require_govcon_entitlement(
+    tier: str,
+    *,
+    request: Optional[Request] = None,
+) -> TierLimits:
+    """
+    Require GovCon entitlement or raise HTTPException 403.
+    Server-side enforcement - not just UI gating.
+
+    Returns tier limits if allowed.
+    """
+    if not has_govcon_entitlement(tier):
+        # Get request_id from request state if available
+        request_id = None
+        if request:
+            request_id = getattr(request.state, "request_id", None)
+
+        error_detail = {
+            "error": "GOVCON_ENTITLEMENT_DENIED",
+            "feature": "govcon",
+            "current_tier": tier or "free",
+            "message": "GovCon module requires GovCon, Contractor, or Enterprise tier.",
+            "upgrade_to": "govcon",
+            "upgrade_url": "/settings/billing",
+        }
+
+        if request_id:
+            error_detail["request_id"] = request_id
+
+        raise HTTPException(
+            status_code=403,
+            detail=error_detail,
+        )
+
+    return get_tier_limits(tier)
