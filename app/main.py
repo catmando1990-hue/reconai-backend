@@ -86,6 +86,7 @@ from app.routers.intelligence_export_api import router as intelligence_export_ro
 from app.routers.signals_prioritization_api import router as signals_prioritization_router
 from app.routers.entitlements_api import router as entitlements_router
 from app.routers.admin_actions_api import router as admin_actions_router
+from app.routers.admin_diagnostics_api import router as admin_diagnostics_router
 from app.routers.billing_api import router as billing_api_router
 from app.routers.billing_status_api import router as billing_status_api_router
 from app.routers.billing_sync_api import router as billing_sync_api_router
@@ -315,6 +316,8 @@ app.include_router(intelligence_cashflow_router)        # 1C: Cashflow insights
 app.include_router(intelligence_status_router)
 # BUILD 28-30 — Admin Actions API (Diagnostics & Fixes with Approval Flow)
 app.include_router(admin_actions_router)
+# PHASE 5: Admin Diagnostics with JSON Envelope Hardening
+app.include_router(admin_diagnostics_router)
 # STEP 4B — Evidence Retention & Manual Exports
 app.include_router(intelligence_export_router)
 # STEP 4C — Signals Prioritization (Deterministic Ranking)
