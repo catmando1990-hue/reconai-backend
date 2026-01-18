@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 from reportlab.lib.pagesizes import LETTER
 from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
@@ -14,8 +14,7 @@ from app.audit import record_audit_event
 router = APIRouter()
 
 @router.post("/govcon/export/dcaa/pdf")
-def export_for_dcaa_pdf():
-    ctx = get_current_context()
+async def export_for_dcaa_pdf(ctx = Depends(get_current_context)):
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=LETTER)
@@ -29,10 +28,19 @@ def export_for_dcaa_pdf():
     pdf_bytes = buf.getvalue()
     file_hash = hashlib.sha256(pdf_bytes).hexdigest()
 
-    record_audit_event(
-        ctx=ctx,
-        event_type="govcon.export",
-        payload={
+    # Audit: best-effort, never blocks the request.
+    await record_audit_event(
+        actor={
+            "user_id": ctx.get("user_id"),
+            "email": ctx.get("email"),
+            "org_id": ctx.get("org_id"),
+            "tier": ctx.get("tier"),
+        },
+        action="govcon.export",
+        resource_type="export",
+        resource_id="dcaa_pdf",
+        status="ok",
+        metadata={
             "export": "dcaa",
             "format": "pdf",
             "hash": file_hash,
