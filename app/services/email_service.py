@@ -153,7 +153,7 @@ class EmailService:
                     </ul>
 
                     <p style="text-align: center;">
-                        <a href="https://app.reconai.com/dashboard" class="button">Go to Dashboard</a>
+                        <a href="https://app.reconai.com/" class="button">Go to Dashboard</a>
                     </p>
 
                     <p><strong>Need help getting started?</strong></p>
