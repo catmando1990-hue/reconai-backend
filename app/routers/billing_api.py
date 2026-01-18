@@ -85,11 +85,11 @@ async def create_checkout_session(
             line_items=[{"price": price_id, "quantity": 1}],
             success_url=os.getenv(
                 "STRIPE_SUCCESS_URL",
-                "https://app.reconai.dev/dashboard/settings?checkout=success"
+                "https://app.reconai.dev/settings?checkout=success"
             ),
             cancel_url=os.getenv(
                 "STRIPE_CANCEL_URL",
-                "https://app.reconai.dev/dashboard/settings?checkout=cancelled"
+                "https://app.reconai.dev/settings?checkout=cancelled"
             ),
             metadata={
                 "org_id": ctx["org_id"],
