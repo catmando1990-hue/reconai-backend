@@ -139,7 +139,7 @@ async def subscribe_newsletter(request: NewsletterSignupRequest):
 
                         <p><strong>Get started today:</strong></p>
                         <ul>
-                            <li>🚀 <a href="https://app.reconai.com/signup">Start free trial</a></li>
+                            <li>🚀 <a href="https://app.reconai.com/sign-up">Start free trial</a></li>
                             <li>📚 <a href="https://docs.reconai.com">Read documentation</a></li>
                             <li>🎥 <a href="https://reconai.com/tutorials">Watch tutorials</a></li>
                         </ul>
