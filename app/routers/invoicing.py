@@ -1,4 +1,8 @@
 # app/routers/invoicing.py
+# Phase-1 Hotfix: DEPRECATION NOTICE
+# This router (/api/invoicing) is scheduled for deprecation.
+# New integrations should use /api/invoices as the canonical invoice API.
+# Existing functionality preserved for backward compatibility.
 
 from fastapi import APIRouter, HTTPException, status, Depends
 from typing import List, Optional

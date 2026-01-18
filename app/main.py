@@ -191,8 +191,10 @@ from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.incident_guard import IncidentGuardMiddleware
 
-# BUILD 14 — RequestIdMiddleware must be early to propagate x-request-id
-app.add_middleware(RequestIdMiddleware)
+# Phase-1 Hotfix: Middleware ordering corrected
+# In Starlette/FastAPI, LAST added middleware executes FIRST.
+# RequestIdMiddleware must be added LAST to guarantee it runs FIRST on request
+# and LAST on response, ensuring x-request-id is always present.
 app.add_middleware(AuthContextMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(IncidentGuardMiddleware)
@@ -220,6 +222,10 @@ app.add_middleware(
     expose_headers=[],
     max_age=3600,
 )
+
+# Phase-1 Hotfix: RequestIdMiddleware added LAST (executes FIRST)
+# Guarantees x-request-id on ALL responses including errors and OPTIONS
+app.add_middleware(RequestIdMiddleware)
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
