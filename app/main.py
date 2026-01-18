@@ -136,6 +136,8 @@ from app.routers.govcon_audit_verify_api import router as govcon_audit_verify_ro
 from app.routers.dashboard_overview import router as dashboard_overview_router
 # DASHBOARD — Metrics API (Chart data, safe defaults)
 from app.routers.dashboard_metrics_api import router as dashboard_metrics_router
+# PHASE 3B — AR Aging API (Read-Only, Manual-Refresh)
+from app.routers.ar_aging import router as ar_aging_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -402,6 +404,8 @@ app.include_router(govcon_audit_verify_router)
 app.include_router(dashboard_overview_router)
 # DASHBOARD — Metrics API (Chart Data, Safe Defaults)
 app.include_router(dashboard_metrics_router)
+# PHASE 3B — AR Aging API (Read-Only, Manual-Refresh)
+app.include_router(ar_aging_router)
 
 
 @app.on_event("startup")
@@ -518,6 +522,7 @@ async def startup_event():
     print(">> GOVCON: Reconciliation API at /govcon/reconciliation (ICS, SF-1408, variance analysis)")
     print(">> GOVCON: Audit API at /govcon/audit (immutable trail, hash chain integrity, 6-year retention)")
     print(">> DASHBOARD: Overview API at /api/dashboard/overview (CFO snapshot, read-only, manual-refresh)")
+    print(">> PHASE 3B: AR Aging API at /api/ar/aging (buckets, read-only, manual-refresh)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
