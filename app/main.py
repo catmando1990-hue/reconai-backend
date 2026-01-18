@@ -123,8 +123,16 @@ from app.routers.govcon_timekeeping import router as govcon_timekeeping_router
 from app.routers.govcon_indirects import router as govcon_indirects_router
 from app.routers.govcon_reconciliation import router as govcon_reconciliation_router
 from app.routers.govcon_audit import router as govcon_audit_router
+# GOVCON — Export API (Manual-Run, Read-Only)
+from app.routers.govcon_export_api import router as govcon_export_router
+# GOVCON — Evidence Viewer API (Read-Only, Fail-Closed)
+from app.routers.govcon_evidence_api import router as govcon_evidence_router
+# GOVCON — Audit Verification API (Read-Only, Fail-Closed)
+from app.routers.govcon_audit_verify_api import router as govcon_audit_verify_router
 # DASHBOARD — Main Dashboard Overview API
 from app.routers.dashboard_overview import router as dashboard_overview_router
+# DASHBOARD — Metrics API (Chart data, safe defaults)
+from app.routers.dashboard_metrics_api import router as dashboard_metrics_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -377,8 +385,16 @@ app.include_router(govcon_timekeeping_router)
 app.include_router(govcon_indirects_router)
 app.include_router(govcon_reconciliation_router)
 app.include_router(govcon_audit_router)
+# GOVCON — Export API (Manual-Run, Read-Only, Audit-Logged)
+app.include_router(govcon_export_router)
+# GOVCON — Evidence Viewer API (Read-Only, Fail-Closed)
+app.include_router(govcon_evidence_router)
+# GOVCON — Audit Verification API (Read-Only, Fail-Closed)
+app.include_router(govcon_audit_verify_router)
 # DASHBOARD — Main Dashboard Overview API (Read-Only, Manual-Refresh)
 app.include_router(dashboard_overview_router)
+# DASHBOARD — Metrics API (Chart Data, Safe Defaults)
+app.include_router(dashboard_metrics_router)
 
 
 @app.on_event("startup")
