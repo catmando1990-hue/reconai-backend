@@ -137,7 +137,8 @@ async def create_organization(
             name=request.name,
             slug=request.slug,
             owner_email=request.owner_email,
-            tier=request.tier,
+            # SECURITY HARDENING: public org creation is forced to free tier
+            tier="free",
             industry=request.industry.value if request.industry else None
         )
 
@@ -151,7 +152,7 @@ async def create_organization(
                 "email_verified": user.email_verified,
                 "created_at": user.created_at
             },
-            message=f"Organization '{org.name}' created successfully with 14-day trial"
+            message=f"Organization '{org.name}' created successfully"
         )
 
     except ValueError as e:

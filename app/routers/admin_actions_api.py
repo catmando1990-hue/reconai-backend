@@ -18,6 +18,9 @@ import string
 from datetime import timedelta
 
 from app.auth_context import get_current_context, AuthContext
+from app.db import DB_PATH
+from app.services.organization_service import OrganizationService
+from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Actions"])
 
@@ -65,6 +68,29 @@ class DiagnosticRequest(BaseModel):
     type: Literal["health", "performance", "security", "bugs"]
     depth: Literal["quick", "standard", "deep"] = "standard"
     include_fixes: bool = True
+
+
+
+
+# =============================================================================
+# ORG TIER OVERRIDE (ADMIN ONLY)
+# =============================================================================
+
+ALLOWED_ORG_TIERS = {"free", "starter", "pro", "govcon", "enterprise"}
+
+
+class SetOrgTierRequest(BaseModel):
+    """Admin-only override to set the active organization's tier.
+
+    Manual-run safety: requires an explicit confirm string.
+    Confirm format: SET_TIER:<TIER> (e.g., SET_TIER:GOVCON)
+    """
+
+    tier: str
+    confirm: str
+
+    def normalized_tier(self) -> str:
+        return (self.tier or "").strip().lower()
 
 
 class DiagnosticResult(BaseModel):
@@ -152,6 +178,69 @@ def cleanup_expired_fixes():
     ]
     for fix_id in expired:
         del _pending_fixes[fix_id]
+
+
+@router.post("/org/tier")
+async def set_active_org_tier(
+    request: SetOrgTierRequest,
+    ctx: AuthContext = Depends(get_current_context),
+):
+    """
+    POST /api/admin/org/tier
+
+    Admin-only manual action to set the *active* organization's tier.
+    This is intended for controlled testing / break-glass operations.
+
+    Safety: caller must supply confirm=SET_TIER:<TIER> (uppercase).
+    """
+    assert_admin(ctx)
+
+    tier = request.normalized_tier()
+    if tier not in ALLOWED_ORG_TIERS:
+        raise HTTPException(status_code=400, detail={
+            "ok": False,
+            "error": "INVALID_TIER",
+            "message": f"Tier must be one of: {', '.join(sorted(ALLOWED_ORG_TIERS))}",
+        })
+
+    expected = f"SET_TIER:{tier.upper()}"
+    provided = (request.confirm or "").strip().upper()
+    if provided != expected:
+        raise HTTPException(status_code=400, detail={
+            "ok": False,
+            "error": "CONFIRMATION_REQUIRED",
+            "message": "Invalid confirm string.",
+            "expected_format": "SET_TIER:<TIER>",
+            "example": expected,
+        })
+
+    service = OrganizationService(DB_PATH)
+    org_id = ctx["org_id"]
+    org = service.get_organization(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail={
+            "ok": False,
+            "error": "ORG_NOT_FOUND",
+            "message": "Active organization not found",
+        })
+
+    prev = getattr(getattr(org, "tier", None), "value", None) or "free"
+    service.update_organization(org_id, {"tier": tier})
+
+    record_audit(
+        actor=ctx["user_id"],
+        action="org_tier_updated",
+        entity="organization",
+        entity_id=org_id,
+        payload={"from": prev, "to": tier},
+    )
+
+    return {
+        "ok": True,
+        "org_id": org_id,
+        "previous_tier": prev,
+        "new_tier": tier,
+    }
 
 
 # ============================================================================

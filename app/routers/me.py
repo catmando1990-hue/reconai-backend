@@ -42,6 +42,7 @@ class MeOrg(BaseModel):
     name: str
     slug: str
     tier: str
+    tiers: List[str] = Field(default_factory=list)
     subscription_status: Optional[str] = None
     features: List[str] = Field(default_factory=list)
     is_personal_workspace: bool = False
@@ -84,6 +85,7 @@ def _to_org(o: Organization, features: List[str]) -> MeOrg:
         name=o.name,
         slug=o.slug,
         tier=o.tier.value,
+        tiers=[o.tier.value],
         subscription_status=o.subscription_status,
         features=features,
         is_personal_workspace=is_personal,
