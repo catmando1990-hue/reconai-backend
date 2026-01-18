@@ -125,6 +125,8 @@ from app.routers.govcon_reconciliation import router as govcon_reconciliation_ro
 from app.routers.govcon_audit import router as govcon_audit_router
 # GOVCON — Export API (Manual-Run, Read-Only)
 from app.routers.govcon_export_api import router as govcon_export_router
+# GOVCON — PDF Export API (Manual-Run, Read-Only)
+from app.routers.govcon_export_pdf_api import router as govcon_export_pdf_router
 # GOVCON — Evidence Viewer API (Read-Only, Fail-Closed)
 from app.routers.govcon_evidence_api import router as govcon_evidence_router
 # GOVCON — Audit Verification API (Read-Only, Fail-Closed)
@@ -387,6 +389,8 @@ app.include_router(govcon_reconciliation_router)
 app.include_router(govcon_audit_router)
 # GOVCON — Export API (Manual-Run, Read-Only, Audit-Logged)
 app.include_router(govcon_export_router)
+# GOVCON — PDF Export API (Manual-Run, Read-Only, Audit-Logged)
+app.include_router(govcon_export_pdf_router)
 # GOVCON — Evidence Viewer API (Read-Only, Fail-Closed)
 app.include_router(govcon_evidence_router)
 # GOVCON — Audit Verification API (Read-Only, Fail-Closed)
