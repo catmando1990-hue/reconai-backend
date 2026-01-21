@@ -76,6 +76,7 @@ def init_db() -> None:
                 default_org_id TEXT,
                 is_active INTEGER DEFAULT 1,
                 email_verified INTEGER DEFAULT 0,
+                profile_completed INTEGER DEFAULT 0,
                 email_notifications INTEGER DEFAULT 1,
                 transaction_alerts INTEGER DEFAULT 1,
                 compliance_alerts INTEGER DEFAULT 1,
@@ -88,6 +89,12 @@ def init_db() -> None:
                 FOREIGN KEY (default_org_id) REFERENCES organizations(id)
             )
         """)
+
+        # P0: Migration - Add profile_completed column if missing
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN profile_completed INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
         # Organization Members
         conn.execute("""

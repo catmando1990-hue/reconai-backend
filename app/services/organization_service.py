@@ -202,6 +202,13 @@ class OrganizationService:
             row = cursor.fetchone()
 
             if row:
+                # P0: Handle profile_completed column which may not exist in older DBs
+                profile_completed = False
+                try:
+                    profile_completed = bool(row['profile_completed'])
+                except (KeyError, IndexError):
+                    pass
+
                 return User(
                     id=row['id'],
                     email=row['email'],
@@ -213,6 +220,7 @@ class OrganizationService:
                     default_org_id=row['default_org_id'],
                     is_active=bool(row['is_active']),
                     email_verified=bool(row['email_verified']),
+                    profile_completed=profile_completed,
                     last_login_at=datetime.fromisoformat(row['last_login_at']) if row['last_login_at'] else None,
                     created_at=datetime.fromisoformat(row['created_at']),
                     updated_at=datetime.fromisoformat(row['updated_at'])

@@ -219,6 +219,7 @@ class User(BaseModel):
     # Status
     is_active: bool = True
     email_verified: bool = False
+    profile_completed: bool = Field(False, description="True when user has completed profile setup")
     last_login_at: Optional[datetime] = None
 
     # Metadata

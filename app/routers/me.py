@@ -35,6 +35,7 @@ class MeUser(BaseModel):
     default_org_id: Optional[str] = None
     is_active: bool
     email_verified: bool
+    profile_completed: bool = False
 
 
 class MeOrg(BaseModel):
@@ -74,6 +75,7 @@ def _to_user(u: User) -> MeUser:
         default_org_id=u.default_org_id,
         is_active=bool(u.is_active),
         email_verified=bool(u.email_verified),
+        profile_completed=bool(getattr(u, 'profile_completed', False)),
     )
 
 
