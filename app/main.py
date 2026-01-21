@@ -154,6 +154,8 @@ from app.routers.documents import router as documents_router
 from app.routers.external_audit_api import router as external_audit_router
 # PHASE 9 — Signed Evidence Export Packs API (Manual-Trigger, SHA-256)
 from app.routers.evidence_export_api import router as evidence_export_router
+# P0 — Profile Completion API (Onboarding Unblock)
+from app.routers.profile_complete import router as profile_complete_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -444,6 +446,8 @@ app.include_router(documents_router)
 app.include_router(external_audit_router)
 # PHASE 9 — Signed Evidence Export Packs API (Manual-Trigger, SHA-256)
 app.include_router(evidence_export_router)
+# P0 — Profile Completion API (Onboarding Unblock, Atomic, Idempotent)
+app.include_router(profile_complete_router)
 
 
 @app.on_event("startup")
@@ -574,6 +578,7 @@ async def startup_event():
     print(">> PHASE 1: Transaction Intelligence at /api/intelligence/classify, /api/intelligence/transactions (manual-run, read-only overlay)")
     print(">> PHASE 2: GovCon/DCAA Compliance at /api/govcon/transactions, /api/govcon/export (manual-run, FAR 31.201, CAS 418)")
     print(">> PHASE 3: CFO Controls at /api/cfo/overview, /api/cfo/forecast, /api/cfo/exceptions (read-only, projections≠facts)")
+    print(">> P0: Profile Completion at /api/profile/complete, /api/profile/status (atomic, idempotent, onboarding unblock)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
