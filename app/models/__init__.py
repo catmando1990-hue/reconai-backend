@@ -15,6 +15,25 @@ from .rbac import RbacSnapshot, Permission
 from .retention import RetentionPolicy, RetentionScope
 from .export_pack import ExportPackRequest, ExportPackResponse, ExportInclude
 from .support import SupportTicket, SupportTicketCreate, SupportPriority, SupportStatus
+from .plaid import (
+    PlaidItemStatus,
+    PlaidWebhookType,
+    PlaidWebhookCode,
+    PlaidAuditAction,
+    CreateLinkTokenRequest,
+    ExchangePublicTokenRequest,
+    TransactionsSyncRequest,
+    PlaidWebhookPayload,
+    PlaidApiResponse,
+    CreateLinkTokenResponse,
+    ExchangePublicTokenResponse,
+    PlaidAccount,
+    PlaidTransaction,
+    TransactionsSyncResponse,
+    WebhookResponse,
+    PlaidItemInfo,
+    ListPlaidItemsResponse,
+)
 
 
 # -----------------------------
@@ -176,4 +195,22 @@ __all__ = [
     "FeedbackRequest",
     "FeedbackResponse",
     "MerchantFeedbackRequest",
+    # Production Plaid models
+    "PlaidItemStatus",
+    "PlaidWebhookType",
+    "PlaidWebhookCode",
+    "PlaidAuditAction",
+    "CreateLinkTokenRequest",
+    "ExchangePublicTokenRequest",
+    "TransactionsSyncRequest",
+    "PlaidWebhookPayload",
+    "PlaidApiResponse",
+    "CreateLinkTokenResponse",
+    "ExchangePublicTokenResponse",
+    "PlaidAccount",
+    "PlaidTransaction",
+    "TransactionsSyncResponse",
+    "WebhookResponse",
+    "PlaidItemInfo",
+    "ListPlaidItemsResponse",
 ]

@@ -642,5 +642,79 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events(actor_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_type ON audit_events(event_type)")
 
+        # =================================================================
+        # PLAID INTEGRATION TABLES
+        # =================================================================
+
+        # Plaid Items (connected bank accounts)
+        # Access tokens are encrypted at rest using AES-256-GCM
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plaid_items (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                entity_id TEXT,
+                item_id TEXT NOT NULL UNIQUE,
+                access_token_encrypted TEXT NOT NULL,
+                institution_id TEXT,
+                institution_name TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                sync_cursor TEXT,
+                last_synced_at TEXT,
+                error_code TEXT,
+                error_message TEXT,
+                webhook_url TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                created_by TEXT NOT NULL,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (entity_id) REFERENCES entities(id) ON DELETE SET NULL,
+                FOREIGN KEY (created_by) REFERENCES users(id)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_items_org ON plaid_items(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_items_item_id ON plaid_items(item_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_items_status ON plaid_items(status)")
+
+        # Plaid Audit Log (immutable - append only)
+        # Records all sensitive Plaid operations for compliance
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plaid_audit_log (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                item_id TEXT,
+                action TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '{}',
+                ip_address TEXT,
+                user_agent TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_audit_org ON plaid_audit_log(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_audit_item ON plaid_audit_log(item_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_audit_action ON plaid_audit_log(action)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_audit_created ON plaid_audit_log(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_audit_request ON plaid_audit_log(request_id)")
+
+        # Plaid Webhook Events (for idempotency and debugging)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plaid_webhook_events (
+                id TEXT PRIMARY KEY,
+                item_id TEXT NOT NULL,
+                webhook_type TEXT NOT NULL,
+                webhook_code TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                processed INTEGER DEFAULT 0,
+                processed_at TEXT,
+                error_message TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_webhook_item ON plaid_webhook_events(item_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_webhook_processed ON plaid_webhook_events(processed)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_webhook_created ON plaid_webhook_events(created_at)")
+
         conn.commit()
         print("Multi-tenancy database tables created")
