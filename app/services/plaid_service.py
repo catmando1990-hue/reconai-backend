@@ -724,11 +724,20 @@ class PlaidService:
 
         Returns:
             True if signature is valid, False otherwise
+
+        FAIL-CLOSED: Production requires PLAID_WEBHOOK_SECRET.
+        Non-production allows unverified webhooks for local testing.
         """
         webhook_secret = os.getenv("PLAID_WEBHOOK_SECRET")
+        env = os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("NODE_ENV")
+
         if not webhook_secret:
-            logger.warning("PLAID_WEBHOOK_SECRET not configured - skipping verification")
-            return True  # Allow in development
+            if env == "production":
+                logger.error("PLAID_WEBHOOK_SECRET not configured in production - rejecting webhook")
+                return False  # FAIL-CLOSED in production
+            else:
+                logger.warning("PLAID_WEBHOOK_SECRET not configured - skipping verification (non-production)")
+                return True  # Allow in development/sandbox
 
         try:
             expected_signature = hmac.new(

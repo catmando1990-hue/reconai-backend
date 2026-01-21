@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -286,7 +287,23 @@ async def handle_webhook(
     # Read raw body for signature verification
     body = await request.body()
 
-    # Verify signature if configured
+    # FAIL-CLOSED: Production requires Plaid-Verification header
+    env = os.getenv("ENVIRONMENT") or os.getenv("ENV") or os.getenv("NODE_ENV")
+    if not plaid_verification:
+        if env == "production":
+            logger.warning("Webhook missing Plaid-Verification header in production")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "error": "WEBHOOK_ERROR",
+                    "error_code": "MISSING_SIGNATURE",
+                    "message": "Plaid-Verification header required in production",
+                },
+            )
+        else:
+            logger.warning("Webhook missing Plaid-Verification header (non-production, allowing)")
+
+    # Verify signature if header present
     if plaid_verification:
         if not plaid_service.verify_webhook_signature(body, plaid_verification):
             logger.warning("Webhook signature verification failed")
