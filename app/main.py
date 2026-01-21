@@ -144,6 +144,8 @@ from app.routers.ar_aging import router as ar_aging_router
 from app.routers.intelligence_classify_api import router as intelligence_classify_router
 # PHASE 2 — GovCon/DCAA Compliance Pipeline (Read-Only Overlay)
 from app.routers.govcon_compliance_api import router as govcon_compliance_router
+# PHASE 3 — CFO / Financial Controls (Read-Only)
+from app.routers.cfo_controls_api import router as cfo_controls_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -424,6 +426,8 @@ app.include_router(ar_aging_router)
 app.include_router(intelligence_classify_router)
 # PHASE 2 — GovCon/DCAA Compliance Pipeline (Read-Only Overlay, Manual-Run)
 app.include_router(govcon_compliance_router)
+# PHASE 3 — CFO / Financial Controls (Read-Only, Manual-Refresh)
+app.include_router(cfo_controls_router)
 
 
 @app.on_event("startup")
@@ -452,6 +456,11 @@ async def startup_event():
     # STEP 8: Enforce Stripe secrets in production (fail-closed)
     from app.guardrails.stripe_hardening import enforce_stripe_prod
     await run_in_threadpool(enforce_stripe_prod)
+
+    # Enforce Plaid OAuth secrets in production (fail-closed)
+    from app.guardrails.plaid_oauth_hardening import enforce_plaid_oauth_prod, warn_plaid_redirect_uri
+    await run_in_threadpool(enforce_plaid_oauth_prod)
+    await run_in_threadpool(warn_plaid_redirect_uri)
 
     print(">> Initializing bookkeeping engine...")
     bookkeeper = await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
@@ -543,6 +552,7 @@ async def startup_event():
     print(">> PHASE 3B: AR Aging API at /api/ar/aging (buckets, read-only, manual-refresh)")
     print(">> PHASE 1: Transaction Intelligence at /api/intelligence/classify, /api/intelligence/transactions (manual-run, read-only overlay)")
     print(">> PHASE 2: GovCon/DCAA Compliance at /api/govcon/transactions, /api/govcon/export (manual-run, FAR 31.201, CAS 418)")
+    print(">> PHASE 3: CFO Controls at /api/cfo/overview, /api/cfo/forecast, /api/cfo/exceptions (read-only, projections≠facts)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 

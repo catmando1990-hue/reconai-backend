@@ -7,6 +7,21 @@ Supports:
 - Cursor-based transaction sync
 - Webhook event handling
 - Immutable audit logging
+
+============================================================================
+FROZEN AS OF 2024-01-20 (Phase 4 System Hardening)
+============================================================================
+
+DO NOT MODIFY THIS FILE WITHOUT FOLLOWING THE CHANGE PROCEDURE IN:
+    app/plaid/FROZEN.md
+
+Model Contract:
+- PlaidItemStatus, PlaidWebhookType, PlaidWebhookCode enums
+- Request/Response models for all Plaid operations
+- All responses include request_id for tracing
+
+Any changes require: RFC + Security Review + Migration Plan
+============================================================================
 """
 
 from __future__ import annotations

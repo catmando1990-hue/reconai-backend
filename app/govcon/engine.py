@@ -501,13 +501,17 @@ class GovConComplianceEngine:
             data_query = f"{base_query} ORDER BY t.tx_date DESC LIMIT ? OFFSET ?"
             rows = conn.execute(data_query, params + [limit, offset]).fetchall()
 
+        # PHASE 4 OPTIMIZATION: Batch fetch evidence chains to eliminate N+1 queries
+        govcon_ids = [row["govcon_id"] for row in rows if row["govcon_id"]]
+        evidence_by_govcon = self._batch_get_evidence_chains(govcon_ids)
+
         # Build response
         results: List[GovConTransactionOverlay] = []
         for row in rows:
             govcon_classification = None
             if row["govcon_id"]:
-                # Fetch evidence chain for this classification
-                evidence_chain = self._get_evidence_chain(row["govcon_id"])
+                # Use pre-fetched evidence (O(1) lookup)
+                evidence_chain = evidence_by_govcon.get(row["govcon_id"], [])
                 govcon_classification = GovConClassification(
                     id=row["govcon_id"],
                     organization_id=org_id,
@@ -555,7 +559,7 @@ class GovConComplianceEngine:
         return results, total
 
     def _get_evidence_chain(self, classification_id: str) -> List[EvidenceChainItem]:
-        """Fetch evidence chain for a GovCon classification."""
+        """Fetch evidence chain for a GovCon classification (single ID - legacy method)."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
@@ -582,6 +586,50 @@ class GovConComplianceEngine:
             )
             for row in rows
         ]
+
+    def _batch_get_evidence_chains(
+        self, classification_ids: List[str]
+    ) -> Dict[str, List[EvidenceChainItem]]:
+        """
+        PHASE 4 OPTIMIZATION: Batch fetch evidence chains for multiple classifications.
+        Eliminates N+1 query pattern by fetching all evidence in one query.
+        """
+        if not classification_ids:
+            return {}
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            placeholders = ",".join("?" * len(classification_ids))
+            rows = conn.execute(
+                f"""
+                SELECT classification_id, id, evidence_type, value, description,
+                       created_at, created_by, prev_hash, evidence_hash
+                FROM govcon_evidence_chain
+                WHERE classification_id IN ({placeholders})
+                ORDER BY classification_id, created_at ASC
+                """,
+                classification_ids,
+            ).fetchall()
+
+        # Group by classification_id
+        result: Dict[str, List[EvidenceChainItem]] = {}
+        for row in rows:
+            cls_id = row["classification_id"]
+            if cls_id not in result:
+                result[cls_id] = []
+            result[cls_id].append(
+                EvidenceChainItem(
+                    id=row["id"],
+                    evidence_type=row["evidence_type"],
+                    value=json.loads(row["value"]),
+                    description=row["description"],
+                    created_at=row["created_at"],
+                    created_by=row["created_by"],
+                    prev_hash=row["prev_hash"],
+                    evidence_hash=row["evidence_hash"],
+                )
+            )
+        return result
 
     def generate_export_preview(
         self,

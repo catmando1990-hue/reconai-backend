@@ -9,6 +9,24 @@ Production Plaid API routes with:
 - Immutable audit logging
 
 Products: transactions, auth, balance
+
+============================================================================
+FROZEN AS OF 2024-01-20 (Phase 4 System Hardening)
+============================================================================
+
+DO NOT MODIFY THIS FILE WITHOUT FOLLOWING THE CHANGE PROCEDURE IN:
+    app/plaid/FROZEN.md
+
+Contract Surface:
+- POST /api/plaid/create-link-token
+- POST /api/plaid/exchange-public-token
+- POST /api/plaid/sync-transactions
+- GET  /api/plaid/items
+- POST /api/plaid/webhook
+- DELETE /api/plaid/items/{item_id}
+
+Any changes require: RFC + Security Review + Migration Plan
+============================================================================
 """
 
 from __future__ import annotations

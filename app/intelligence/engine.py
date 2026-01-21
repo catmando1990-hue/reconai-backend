@@ -420,13 +420,21 @@ class TransactionIntelligenceEngine:
             data_query = f"{base_query} ORDER BY t.tx_date DESC LIMIT ? OFFSET ?"
             rows = conn.execute(data_query, params + [limit, offset]).fetchall()
 
+        # PHASE 4 OPTIMIZATION: Batch fetch evidence to eliminate N+1 queries
+        classification_ids = [row["classification_id"] for row in rows if row["classification_id"]]
+        duplicate_group_ids = [row["duplicate_group_id"] for row in rows if row["duplicate_group_id"]]
+
+        # Batch fetch all evidence in 2 queries instead of N queries
+        evidence_by_classification = self._batch_get_classification_evidence(classification_ids)
+        evidence_by_duplicate_group = self._batch_get_duplicate_evidence(duplicate_group_ids)
+
         # Build response
         results: List[TransactionWithClassification] = []
         for row in rows:
             classification = None
             if row["classification_id"]:
-                # Fetch evidence for this classification
-                evidence = self._get_classification_evidence(row["classification_id"])
+                # Use pre-fetched evidence (O(1) lookup)
+                evidence = evidence_by_classification.get(row["classification_id"], [])
                 classification = ClassificationResult(
                     transaction_id=row["transaction_id"],
                     category=row["category"],
@@ -440,8 +448,8 @@ class TransactionIntelligenceEngine:
 
             duplicate_group = None
             if row["duplicate_group_id"]:
-                # Fetch evidence for this duplicate group
-                dup_evidence = self._get_duplicate_evidence_by_group(row["duplicate_group_id"])
+                # Use pre-fetched evidence (O(1) lookup)
+                dup_evidence = evidence_by_duplicate_group.get(row["duplicate_group_id"], [])
                 duplicate_group = DuplicateGroup(
                     group_id=row["duplicate_group_id"],
                     transaction_ids=json.loads(row["duplicate_tx_ids"] or "[]"),
@@ -470,7 +478,7 @@ class TransactionIntelligenceEngine:
         return results, total
 
     def _get_classification_evidence(self, classification_id: str) -> List[EvidenceItem]:
-        """Fetch evidence for a classification."""
+        """Fetch evidence for a classification (single ID - legacy method)."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
@@ -492,8 +500,46 @@ class TransactionIntelligenceEngine:
             for row in rows
         ]
 
+    def _batch_get_classification_evidence(
+        self, classification_ids: List[str]
+    ) -> Dict[str, List[EvidenceItem]]:
+        """
+        PHASE 4 OPTIMIZATION: Batch fetch evidence for multiple classifications.
+        Eliminates N+1 query pattern by fetching all evidence in one query.
+        """
+        if not classification_ids:
+            return {}
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            placeholders = ",".join("?" * len(classification_ids))
+            rows = conn.execute(
+                f"""
+                SELECT classification_id, evidence_type, value, weight, description
+                FROM transaction_evidence
+                WHERE classification_id IN ({placeholders})
+                """,
+                classification_ids,
+            ).fetchall()
+
+        # Group by classification_id
+        result: Dict[str, List[EvidenceItem]] = {}
+        for row in rows:
+            cls_id = row["classification_id"]
+            if cls_id not in result:
+                result[cls_id] = []
+            result[cls_id].append(
+                EvidenceItem(
+                    evidence_type=row["evidence_type"],
+                    value=json.loads(row["value"]),
+                    weight=row["weight"],
+                    description=row["description"],
+                )
+            )
+        return result
+
     def _get_duplicate_evidence_by_group(self, group_id: str) -> List[EvidenceItem]:
-        """Fetch evidence for a duplicate group."""
+        """Fetch evidence for a duplicate group (single ID - legacy method)."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
@@ -515,6 +561,45 @@ class TransactionIntelligenceEngine:
             )
             for row in rows
         ]
+
+    def _batch_get_duplicate_evidence(
+        self, group_ids: List[str]
+    ) -> Dict[str, List[EvidenceItem]]:
+        """
+        PHASE 4 OPTIMIZATION: Batch fetch evidence for multiple duplicate groups.
+        Eliminates N+1 query pattern by fetching all evidence in one query.
+        """
+        if not group_ids:
+            return {}
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            placeholders = ",".join("?" * len(group_ids))
+            rows = conn.execute(
+                f"""
+                SELECT d.group_id, e.evidence_type, e.value, e.weight, e.description
+                FROM duplicate_evidence e
+                JOIN transaction_duplicates d ON e.duplicate_id = d.id
+                WHERE d.group_id IN ({placeholders})
+                """,
+                group_ids,
+            ).fetchall()
+
+        # Group by group_id
+        result: Dict[str, List[EvidenceItem]] = {}
+        for row in rows:
+            grp_id = row["group_id"]
+            if grp_id not in result:
+                result[grp_id] = []
+            result[grp_id].append(
+                EvidenceItem(
+                    evidence_type=row["evidence_type"],
+                    value=json.loads(row["value"]),
+                    weight=row["weight"],
+                    description=row["description"],
+                )
+            )
+        return result
 
     def get_classification_stats(self, org_id: str) -> Dict[str, Any]:
         """Get classification statistics for an organization."""

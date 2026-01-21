@@ -13,6 +13,8 @@ USER_ACCESS_TOKENS: Dict[str, str] = {}
 PLAID_CLIENT_ID = os.getenv("PLAID_CLIENT_ID")
 PLAID_SECRET = os.getenv("PLAID_SECRET")
 PLAID_ENV = os.getenv("PLAID_ENV", "sandbox")
+# OAuth redirect URI (REQUIRED for production OAuth flows)
+PLAID_REDIRECT_URI = os.getenv("PLAID_REDIRECT_URI")
 
 # Phase 67-69 policy flags
 from .policy_flags import ENTERPRISE_FLAGS
@@ -22,5 +24,6 @@ __all__ = [
     "PLAID_CLIENT_ID",
     "PLAID_SECRET",
     "PLAID_ENV",
+    "PLAID_REDIRECT_URI",
     "ENTERPRISE_FLAGS",
 ]

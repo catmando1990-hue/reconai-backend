@@ -7,6 +7,22 @@ Production-ready Plaid service with:
 - Immutable audit logging
 - Duplicate detection
 - Webhook signature verification
+
+============================================================================
+FROZEN AS OF 2024-01-20 (Phase 4 System Hardening)
+============================================================================
+
+DO NOT MODIFY THIS FILE WITHOUT FOLLOWING THE CHANGE PROCEDURE IN:
+    app/plaid/FROZEN.md
+
+Security Guarantees:
+- AES-256-GCM token encryption (ENCRYPTION_KEY env var)
+- HMAC-SHA256 webhook verification (PLAID_WEBHOOK_SECRET env var)
+- Org-scoped data isolation
+- Immutable audit trail
+
+Any changes require: RFC + Security Review + Migration Plan
+============================================================================
 """
 
 from __future__ import annotations
