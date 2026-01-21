@@ -70,6 +70,8 @@ from app.routers.deploy_runs import router as deploy_runs_router
 from app.routers.system_state import router as system_state_router
 from app.routers.governance import router as governance_router
 from app.routers.plaid_hardening import router as plaid_hardening_router
+# Production Plaid API (auth-protected, org-scoped, encrypted tokens)
+from app.routers.plaid_v2 import router as plaid_v2_router
 from app.routers.transaction_overrides import router as transaction_overrides_router
 from app.routers.audit_api import router as audit_api_router
 from app.routers.policy_api import router as policy_api_router
@@ -138,6 +140,8 @@ from app.routers.dashboard_overview import router as dashboard_overview_router
 from app.routers.dashboard_metrics_api import router as dashboard_metrics_router
 # PHASE 3B — AR Aging API (Read-Only, Manual-Refresh)
 from app.routers.ar_aging import router as ar_aging_router
+# PHASE 1 — Transaction Intelligence (Read-Only Overlay)
+from app.routers.intelligence_classify_api import router as intelligence_classify_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -300,6 +304,8 @@ app.include_router(governance_router)
 
 # BUILD 3C/3D — Plaid Ingestion Hardening
 app.include_router(plaid_hardening_router)
+# Production Plaid API (auth-protected, org-scoped, encrypted tokens, cursor-based sync)
+app.include_router(plaid_v2_router)
 # BUILD 4 — Controlled Write Enablement
 app.include_router(transaction_overrides_router)
 # BUILD 5 — Audit Log + Compliance Surface (Read-Only)
@@ -412,6 +418,8 @@ app.include_router(dashboard_overview_router)
 app.include_router(dashboard_metrics_router)
 # PHASE 3B — AR Aging API (Read-Only, Manual-Refresh)
 app.include_router(ar_aging_router)
+# PHASE 1 — Transaction Intelligence (Read-Only Overlay, Manual-Run)
+app.include_router(intelligence_classify_router)
 
 
 @app.on_event("startup")
@@ -529,6 +537,7 @@ async def startup_event():
     print(">> GOVCON: Audit API at /govcon/audit (immutable trail, hash chain integrity, 6-year retention)")
     print(">> DASHBOARD: Overview API at /api/dashboard/overview (CFO snapshot, read-only, manual-refresh)")
     print(">> PHASE 3B: AR Aging API at /api/ar/aging (buckets, read-only, manual-refresh)")
+    print(">> PHASE 1: Transaction Intelligence at /api/intelligence/classify, /api/intelligence/transactions (manual-run, read-only overlay)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
