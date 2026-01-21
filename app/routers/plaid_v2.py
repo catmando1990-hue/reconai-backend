@@ -169,6 +169,21 @@ async def exchange_public_token(
             f"Token exchange failed: org={ctx['org_id']} "
             f"error={response.error.error_code if response.error else 'unknown'}"
         )
+        return response
+
+    # P0 HARD FAIL: item_id is REQUIRED on success - no silent fallbacks
+    if not response.item_id:
+        logger.error(
+            f"Token exchange succeeded but item_id missing: org={ctx['org_id']}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "PLAID_ERROR",
+                "error_code": "MISSING_ITEM_ID",
+                "message": "Plaid exchange succeeded but item_id was not returned",
+            },
+        )
 
     return response
 
