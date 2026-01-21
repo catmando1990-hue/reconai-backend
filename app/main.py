@@ -142,6 +142,8 @@ from app.routers.dashboard_metrics_api import router as dashboard_metrics_router
 from app.routers.ar_aging import router as ar_aging_router
 # PHASE 1 — Transaction Intelligence (Read-Only Overlay)
 from app.routers.intelligence_classify_api import router as intelligence_classify_router
+# PHASE 2 — GovCon/DCAA Compliance Pipeline (Read-Only Overlay)
+from app.routers.govcon_compliance_api import router as govcon_compliance_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -420,6 +422,8 @@ app.include_router(dashboard_metrics_router)
 app.include_router(ar_aging_router)
 # PHASE 1 — Transaction Intelligence (Read-Only Overlay, Manual-Run)
 app.include_router(intelligence_classify_router)
+# PHASE 2 — GovCon/DCAA Compliance Pipeline (Read-Only Overlay, Manual-Run)
+app.include_router(govcon_compliance_router)
 
 
 @app.on_event("startup")
@@ -538,6 +542,7 @@ async def startup_event():
     print(">> DASHBOARD: Overview API at /api/dashboard/overview (CFO snapshot, read-only, manual-refresh)")
     print(">> PHASE 3B: AR Aging API at /api/ar/aging (buckets, read-only, manual-refresh)")
     print(">> PHASE 1: Transaction Intelligence at /api/intelligence/classify, /api/intelligence/transactions (manual-run, read-only overlay)")
+    print(">> PHASE 2: GovCon/DCAA Compliance at /api/govcon/transactions, /api/govcon/export (manual-run, FAR 31.201, CAS 418)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
