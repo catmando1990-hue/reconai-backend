@@ -138,6 +138,8 @@ from app.routers.govcon_audit_verify_api import router as govcon_audit_verify_ro
 from app.routers.dashboard_overview import router as dashboard_overview_router
 # DASHBOARD — Metrics API (Chart data, safe defaults)
 from app.routers.dashboard_metrics_api import router as dashboard_metrics_router
+# DASHBOARD — Metrics API v2 (Production contract, /api/dashboard/metrics)
+from app.routers.dashboard_metrics_v2 import router as dashboard_metrics_v2_router
 # PHASE 3B — AR Aging API (Read-Only, Manual-Refresh)
 from app.routers.ar_aging import router as ar_aging_router
 # PHASE 1 — Transaction Intelligence (Read-Only Overlay)
@@ -426,6 +428,8 @@ app.include_router(govcon_audit_verify_router)
 app.include_router(dashboard_overview_router)
 # DASHBOARD — Metrics API (Chart Data, Safe Defaults)
 app.include_router(dashboard_metrics_router)
+# DASHBOARD — Metrics API v2 (Production Contract, /api/dashboard/metrics)
+app.include_router(dashboard_metrics_v2_router)
 # PHASE 3B — AR Aging API (Read-Only, Manual-Refresh)
 app.include_router(ar_aging_router)
 # PHASE 1 — Transaction Intelligence (Read-Only Overlay, Manual-Run)
@@ -565,6 +569,7 @@ async def startup_event():
     print(">> GOVCON: Reconciliation API at /govcon/reconciliation (ICS, SF-1408, variance analysis)")
     print(">> GOVCON: Audit API at /govcon/audit (immutable trail, hash chain integrity, 6-year retention)")
     print(">> DASHBOARD: Overview API at /api/dashboard/overview (CFO snapshot, read-only, manual-refresh)")
+    print(">> DASHBOARD: Metrics API v2 at /api/dashboard/metrics (fail-closed, explicit availability)")
     print(">> PHASE 3B: AR Aging API at /api/ar/aging (buckets, read-only, manual-refresh)")
     print(">> PHASE 1: Transaction Intelligence at /api/intelligence/classify, /api/intelligence/transactions (manual-run, read-only overlay)")
     print(">> PHASE 2: GovCon/DCAA Compliance at /api/govcon/transactions, /api/govcon/export (manual-run, FAR 31.201, CAS 418)")
