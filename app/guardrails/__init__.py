@@ -12,6 +12,10 @@ from .plaid_oauth_hardening import (
     enforce_plaid_oauth_prod,
     warn_plaid_redirect_uri,
 )
+from .encryption_hardening import (
+    validate_encryption_key,
+    enforce_encryption_key_prod,
+)
 
 __all__ = [
     "enforce_approved_run",
@@ -22,4 +26,6 @@ __all__ = [
     "wrap_intelligence_response",
     "enforce_plaid_oauth_prod",
     "warn_plaid_redirect_uri",
+    "validate_encryption_key",
+    "enforce_encryption_key_prod",
 ]

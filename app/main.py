@@ -474,6 +474,10 @@ async def startup_event():
     await run_in_threadpool(enforce_plaid_oauth_prod)
     await run_in_threadpool(warn_plaid_redirect_uri)
 
+    # P0: Enforce ENCRYPTION_KEY at startup (fail-closed, required for Plaid token encryption)
+    from app.guardrails.encryption_hardening import enforce_encryption_key_prod
+    await run_in_threadpool(enforce_encryption_key_prod)
+
     print(">> Initializing bookkeeping engine...")
     bookkeeper = await run_in_threadpool(lambda: BookkeeperEngine(DB_PATH))
     print(">> Bookkeeping engine ready")
