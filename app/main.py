@@ -146,6 +146,8 @@ from app.routers.intelligence_classify_api import router as intelligence_classif
 from app.routers.govcon_compliance_api import router as govcon_compliance_router
 # PHASE 3 — CFO / Financial Controls (Read-Only)
 from app.routers.cfo_controls_api import router as cfo_controls_router
+# Document Pipeline — First-Class Document Visibility
+from app.routers.documents import router as documents_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -428,6 +430,8 @@ app.include_router(intelligence_classify_router)
 app.include_router(govcon_compliance_router)
 # PHASE 3 — CFO / Financial Controls (Read-Only, Manual-Refresh)
 app.include_router(cfo_controls_router)
+# DOCUMENT PIPELINE — First-Class Document Visibility (Read-Only)
+app.include_router(documents_router)
 
 
 @app.on_event("startup")

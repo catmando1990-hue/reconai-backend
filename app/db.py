@@ -718,3 +718,7 @@ def init_db() -> None:
 
         conn.commit()
         print("Multi-tenancy database tables created")
+
+    # Initialize document pipeline tables
+    from app.services.document_service import init_document_tables
+    init_document_tables()

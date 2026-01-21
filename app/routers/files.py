@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Query
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile, Query
 from fastapi.responses import FileResponse
 
 from app.db import DB_PATH, UPLOADS_DIR
@@ -15,6 +16,13 @@ from app.models import TransactionsRequest, TransactionsResponse
 from app.reconai_core.brain import ReconAIBrain
 from app.reconai_core.bank_pdf import extract_text_from_pdf, parse_bank_statement_text
 from app.reconai_core.parser import parse_text_lines
+from app.services.document_service import (
+    DocumentSource,
+    DocumentStatus,
+    get_document_service,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -68,44 +76,131 @@ def _empty_transactions_response(goal: str, notes: Optional[list[str]] = None) -
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    x_organization_id: Optional[str] = Header(None, alias="X-Organization-ID"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+):
+    """
+    Upload a file and create a document record.
+
+    This endpoint creates a document record FIRST, then stores the file.
+    Even if storage fails, the document exists with status=failed.
+
+    Optional headers for document tracking:
+    - X-Organization-ID: Organization context
+    - X-User-ID: User context (for unauthenticated uploads, uses 'anonymous')
+    """
     if not file:
         raise HTTPException(status_code=400, detail="No file provided")
+
+    doc_service = get_document_service()
+    ip_address = request.client.host if request.client else None
+
+    # Use provided IDs or defaults for legacy compatibility
+    org_id = x_organization_id or "legacy"
+    user_id = x_user_id or "anonymous"
 
     upload_id = uuid4().hex
     original = _safe_name(file.filename or "upload.bin")
 
-    ext = Path(original).suffix.lower()
-    stored_name = f"{upload_id}{ext}" if ext else upload_id
-    stored_path = UPLOADS_DIR / stored_name
+    # =================================================================
+    # STEP 1: Create document record FIRST (before file storage)
+    # =================================================================
+    doc_result = doc_service.create_document(
+        organization_id=org_id,
+        user_id=user_id,
+        filename=original,
+        content_type=file.content_type,
+        source=DocumentSource.UPLOAD,
+        source_endpoint="/files/upload",
+        ip_address=ip_address,
+    )
+    document_id = doc_result["document_id"]
 
-    size = 0
-    with stored_path.open("wb") as out:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            size += len(chunk)
+    try:
+        # =================================================================
+        # STEP 2: Store file to disk
+        # =================================================================
+        ext = Path(original).suffix.lower()
+        stored_name = f"{upload_id}{ext}" if ext else upload_id
+        stored_path = UPLOADS_DIR / stored_name
 
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
-            INSERT INTO uploads (id, filename, content_type, stored_path, size_bytes)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (upload_id, original, file.content_type, str(stored_path), size),
+        size = 0
+        with stored_path.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                size += len(chunk)
+
+        # Update document with file info
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                UPDATE documents
+                SET file_size_bytes = ?, stored_path = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (size, str(stored_path), document_id),
+            )
+            conn.commit()
+
+        # =================================================================
+        # STEP 3: Mark validated (file stored successfully)
+        # =================================================================
+        doc_service.mark_validated(
+            document_id=document_id,
+            actor_id=user_id,
+            details={"stored_path": str(stored_path), "file_size": size},
+            ip_address=ip_address,
         )
-        conn.commit()
 
-    return {
-        "id": upload_id,
-        "filename": original,
-        "content_type": file.content_type,
-        "size_bytes": size,
-        "download_url": f"/files/{upload_id}",
-        "analyze_url": f"/files/{upload_id}/analyze",
-    }
+        # =================================================================
+        # STEP 4: Also store in legacy uploads table for backward compatibility
+        # =================================================================
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """
+                INSERT INTO uploads (id, filename, content_type, stored_path, size_bytes)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (upload_id, original, file.content_type, str(stored_path), size),
+            )
+            conn.commit()
+
+        return {
+            "id": upload_id,
+            "document_id": document_id,
+            "filename": original,
+            "content_type": file.content_type,
+            "size_bytes": size,
+            "status": DocumentStatus.VALIDATED.value,
+            "download_url": f"/files/{upload_id}",
+            "analyze_url": f"/files/{upload_id}/analyze",
+        }
+
+    except Exception as e:
+        # =================================================================
+        # FAILURE: Mark document as failed
+        # =================================================================
+        logger.exception(f"File storage failed for document {document_id}")
+        doc_service.mark_failed(
+            document_id=document_id,
+            actor_id=user_id,
+            failure_reason=str(e),
+            ip_address=ip_address,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "document_id": document_id,
+                "error": str(e),
+                "status": DocumentStatus.FAILED.value,
+            },
+        )
 
 
 @router.get("/{upload_id}")

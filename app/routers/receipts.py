@@ -1,6 +1,7 @@
 # app/routers/receipts.py
 
-from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File
+import logging
+from fastapi import APIRouter, HTTPException, Request, status, Depends, UploadFile, File
 from pydantic import BaseModel
 from typing import Optional, List
 import sqlite3
@@ -10,6 +11,13 @@ import os
 from pathlib import Path
 
 from app.auth_context import get_current_organization_id, get_current_user_id
+from app.services.document_service import (
+    DocumentSource,
+    DocumentStatus,
+    get_document_service,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/receipts", tags=["receipts"])
 
@@ -248,6 +256,7 @@ async def create_receipt(
 
 @router.post("/upload")
 async def upload_receipt(
+    request: Request,
     file: UploadFile = File(...),
     org_id: Optional[str] = None,
     entity_id: Optional[str] = None,
@@ -257,16 +266,61 @@ async def upload_receipt(
     Upload a receipt file with AES-256 encryption
 
     Files are encrypted at rest using AES-256-GCM before being stored.
+    Creates a document record FIRST, then processes the upload.
     """
+    doc_service = get_document_service()
+    ip_address = request.client.host if request.client else None
+    effective_org_id = org_id or "default"
+
+    # =================================================================
+    # STEP 1: Create document record FIRST (before any processing)
+    # =================================================================
+    content = await file.read()
+    file_size = len(content)
+
+    doc_result = doc_service.create_document(
+        organization_id=effective_org_id,
+        user_id=current_user_id,
+        filename=file.filename or "receipt",
+        content_type=file.content_type,
+        file_size_bytes=file_size,
+        source=DocumentSource.RECEIPT,
+        source_endpoint="/api/receipts/upload",
+        ip_address=ip_address,
+    )
+    document_id = doc_result["document_id"]
+
+    temp_file_path = None
+    encrypted_file_path = None
+
     try:
         from app.db import UPLOADS_DIR
         from app.utils.encryption import get_encryption_service
+
+        # =================================================================
+        # STEP 2: Validate file
+        # =================================================================
+        doc_service.mark_validated(
+            document_id=document_id,
+            actor_id=current_user_id,
+            details={"content_type": file.content_type, "file_size": file_size},
+            ip_address=ip_address,
+        )
+
+        # =================================================================
+        # STEP 3: Mark processing started
+        # =================================================================
+        doc_service.mark_processing(
+            document_id=document_id,
+            actor_id=current_user_id,
+            ip_address=ip_address,
+        )
 
         # Get encryption service
         encryption_service = get_encryption_service()
 
         # Create organization uploads directory
-        org_uploads_dir = UPLOADS_DIR / (org_id or "default")
+        org_uploads_dir = UPLOADS_DIR / effective_org_id
         org_uploads_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate unique filename with .enc extension
@@ -275,9 +329,6 @@ async def upload_receipt(
         encrypted_filename = f"{unique_filename}.enc"
         temp_file_path = org_uploads_dir / unique_filename
         encrypted_file_path = org_uploads_dir / encrypted_filename
-
-        # Read uploaded file content
-        content = await file.read()
 
         # Save temporarily (for encryption)
         with open(temp_file_path, "wb") as f:
@@ -288,11 +339,24 @@ async def upload_receipt(
 
         # Delete unencrypted temporary file
         temp_file_path.unlink()
+        temp_file_path = None
+
+        # Update document with stored path
+        with sqlite3.connect(UPLOADS_DIR.parent / "reconai.db") as conn:
+            conn.execute(
+                """
+                UPDATE documents
+                SET stored_path = ?, updated_at = datetime('now')
+                WHERE id = ?
+                """,
+                (str(encrypted_file_path), document_id),
+            )
+            conn.commit()
 
         # Create receipt record
         receipt_data = ReceiptCreate(
             file_name=file.filename or unique_filename,
-            file_url=f"/uploads/{org_id}/{encrypted_filename}",
+            file_url=f"/uploads/{effective_org_id}/{encrypted_filename}",
             vendor_name=None,
             amount=None,
             date=datetime.now().date().isoformat(),
@@ -307,23 +371,53 @@ async def upload_receipt(
             current_user_id
         )
 
+        # =================================================================
+        # STEP 4: Mark completed
+        # =================================================================
+        doc_service.mark_completed(
+            document_id=document_id,
+            actor_id=current_user_id,
+            details={
+                "receipt_id": receipt.id if hasattr(receipt, 'id') else str(receipt.get('id', '')),
+                "encrypted": True,
+            },
+            ip_address=ip_address,
+        )
+
         return {
             "message": "Receipt uploaded and encrypted successfully (AES-256)",
+            "document_id": document_id,
             "receipt": receipt,
             "encrypted": True,
-            "encryption": "AES-256-GCM"
+            "encryption": "AES-256-GCM",
+            "status": DocumentStatus.COMPLETED.value,
         }
 
     except Exception as e:
+        # =================================================================
+        # FAILURE: Clean up and mark document as failed
+        # =================================================================
         # Clean up any temporary files on error
-        if 'temp_file_path' in locals() and temp_file_path.exists():
+        if temp_file_path and temp_file_path.exists():
             temp_file_path.unlink()
-        if 'encrypted_file_path' in locals() and encrypted_file_path.exists():
+        if encrypted_file_path and encrypted_file_path.exists():
             encrypted_file_path.unlink()
+
+        logger.exception(f"Receipt upload failed for document {document_id}")
+        doc_service.mark_failed(
+            document_id=document_id,
+            actor_id=current_user_id,
+            failure_reason=str(e),
+            ip_address=ip_address,
+        )
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error uploading receipt: {str(e)}"
+            detail={
+                "document_id": document_id,
+                "error": str(e),
+                "status": DocumentStatus.FAILED.value,
+            }
         )
 
 

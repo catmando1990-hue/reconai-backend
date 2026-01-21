@@ -3,11 +3,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging
 import uuid
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.auth_context import AuthIdentity, get_current_identity, get_org_service
@@ -15,7 +16,13 @@ from app.db import DB_PATH
 from app.errors import not_authorized, org_required
 from app.models import Transaction, TransactionsRequest
 from app.routers.transactions import analyze as analyze_transactions
+from app.services.document_service import (
+    DocumentSource,
+    DocumentStatus,
+    get_document_service,
+)
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["mvp"])  # no prefix; required paths are root-level
 
@@ -102,6 +109,7 @@ def _flatten_bucket(bucket: List[Transaction], classification: str) -> List[Dict
 
 @router.post("/upload")
 async def upload(
+    request: Request,
     file: UploadFile = File(...),
     org_id: str = Depends(_resolve_mvp_org_id),
     identity: AuthIdentity = Depends(get_current_identity),
@@ -110,73 +118,162 @@ async def upload(
 
     - Requires Authorization: Bearer <JWT>
     - Requires org context via X-Organization-ID header OR user.default_org_id
-    - Stores flattened analyzed transactions into SQLite table: mvp_transactions
+    - Creates document record FIRST (before analysis)
+    - Stores transactions into document_transactions table
+    - Also maintains backward compatibility with mvp_transactions
     """
+    doc_service = get_document_service()
+    user_id = identity["user_id"]
+    ip_address = request.client.host if request.client else None
 
+    # =================================================================
+    # STEP 1: Create document record BEFORE any analysis
+    # =================================================================
     raw = await file.read()
-    request = _parse_transactions_from_upload(file, raw)
+    file_size = len(raw)
 
-    # Reuse existing analysis normalization
-    analyzed = analyze_transactions(request)
+    doc_result = doc_service.create_document(
+        organization_id=org_id,
+        user_id=user_id,
+        filename=file.filename or "unknown",
+        content_type=file.content_type,
+        file_size_bytes=file_size,
+        source=DocumentSource.UPLOAD,
+        source_endpoint="/upload",
+        ip_address=ip_address,
+    )
+    document_id = doc_result["document_id"]
 
-    upload_id = f"mvp-upload-{uuid.uuid4().hex}"
-
-    flattened: List[Dict[str, Any]] = []
-    flattened.extend(_flatten_bucket(analyzed.business_expenses, "business"))
-    flattened.extend(_flatten_bucket(analyzed.personal_expenses, "personal"))
-    flattened.extend(_flatten_bucket(analyzed.transfers, "transfer"))
-    flattened.extend(_flatten_bucket(analyzed.uncertain, "uncertain"))
-
-    import sqlite3
-
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO mvp_uploads (id, organization_id, user_id, filename)
-            VALUES (?, ?, ?, ?)
-            """,
-            (upload_id, org_id, identity["user_id"], file.filename),
+    try:
+        # =================================================================
+        # STEP 2: Validate the file
+        # =================================================================
+        doc_service.mark_validated(
+            document_id=document_id,
+            actor_id=user_id,
+            details={"content_type": file.content_type, "file_size": file_size},
+            ip_address=ip_address,
         )
 
-        for row in flattened:
+        # =================================================================
+        # STEP 3: Mark processing started
+        # =================================================================
+        doc_service.mark_processing(
+            document_id=document_id,
+            actor_id=user_id,
+            ip_address=ip_address,
+        )
+
+        # Parse and analyze
+        tx_request = _parse_transactions_from_upload(file, raw)
+        analyzed = analyze_transactions(tx_request)
+
+        # Flatten transactions
+        flattened: List[Dict[str, Any]] = []
+        flattened.extend(_flatten_bucket(analyzed.business_expenses, "business"))
+        flattened.extend(_flatten_bucket(analyzed.personal_expenses, "personal"))
+        flattened.extend(_flatten_bucket(analyzed.transfers, "transfer"))
+        flattened.extend(_flatten_bucket(analyzed.uncertain, "uncertain"))
+
+        # =================================================================
+        # STEP 4: Store transactions in document_transactions (new pipeline)
+        # =================================================================
+        doc_service.create_document_transactions(
+            document_id=document_id,
+            organization_id=org_id,
+            user_id=user_id,
+            transactions=flattened,
+            provenance="mvp_upload",
+            actor_id=user_id,
+        )
+
+        # =================================================================
+        # STEP 5: Backward compatibility - also store in mvp_transactions
+        # =================================================================
+        import sqlite3
+
+        upload_id = document_id  # Use document_id as upload_id for traceability
+
+        with sqlite3.connect(DB_PATH) as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO mvp_transactions (
-                    id,
-                    upload_id,
-                    organization_id,
-                    user_id,
-                    tx_date,
-                    amount,
-                    description,
-                    merchant,
-                    original_category,
-                    classification,
-                    reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO mvp_uploads (id, organization_id, user_id, filename)
+                VALUES (?, ?, ?, ?)
                 """,
-                (
-                    row["id"],
-                    upload_id,
-                    org_id,
-                    identity["user_id"],
-                    row["date"],
-                    row["amount"],
-                    row["description"],
-                    row["merchant"],
-                    row["original_category"],
-                    row["classification"],
-                    row["reason"],
-                ),
+                (upload_id, org_id, user_id, file.filename),
             )
 
-        conn.commit()
+            for row in flattened:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO mvp_transactions (
+                        id,
+                        upload_id,
+                        organization_id,
+                        user_id,
+                        tx_date,
+                        amount,
+                        description,
+                        merchant,
+                        original_category,
+                        classification,
+                        reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["id"],
+                        upload_id,
+                        org_id,
+                        user_id,
+                        row["date"],
+                        row["amount"],
+                        row["description"],
+                        row["merchant"],
+                        row["original_category"],
+                        row["classification"],
+                        row["reason"],
+                    ),
+                )
 
-    return {
-        "upload_id": upload_id,
-        "organization_id": org_id,
-        "total_transactions": len(flattened),
-    }
+            conn.commit()
+
+        # =================================================================
+        # STEP 6: Mark completed
+        # =================================================================
+        doc_service.mark_completed(
+            document_id=document_id,
+            actor_id=user_id,
+            details={"transaction_count": len(flattened)},
+            ip_address=ip_address,
+        )
+
+        return {
+            "document_id": document_id,
+            "upload_id": upload_id,  # Backward compatible
+            "organization_id": org_id,
+            "total_transactions": len(flattened),
+            "status": DocumentStatus.COMPLETED.value,
+        }
+
+    except Exception as e:
+        # =================================================================
+        # FAILURE: Mark document as failed with reason
+        # =================================================================
+        logger.exception(f"Upload processing failed for document {document_id}")
+        doc_service.mark_failed(
+            document_id=document_id,
+            actor_id=user_id,
+            failure_reason=str(e),
+            ip_address=ip_address,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "document_id": document_id,
+                "error": str(e),
+                "status": DocumentStatus.FAILED.value,
+            },
+        )
 
 
 @router.get("/transactions")
