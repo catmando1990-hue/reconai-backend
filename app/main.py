@@ -148,6 +148,10 @@ from app.routers.govcon_compliance_api import router as govcon_compliance_router
 from app.routers.cfo_controls_api import router as cfo_controls_router
 # Document Pipeline — First-Class Document Visibility
 from app.routers.documents import router as documents_router
+# PHASE 8 — External Audit Mode API (Read-Only, Evidence-Based)
+from app.routers.external_audit_api import router as external_audit_router
+# PHASE 9 — Signed Evidence Export Packs API (Manual-Trigger, SHA-256)
+from app.routers.evidence_export_api import router as evidence_export_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -432,6 +436,10 @@ app.include_router(govcon_compliance_router)
 app.include_router(cfo_controls_router)
 # DOCUMENT PIPELINE — First-Class Document Visibility (Read-Only)
 app.include_router(documents_router)
+# PHASE 8 — External Audit Mode API (Read-Only, Evidence-Based)
+app.include_router(external_audit_router)
+# PHASE 9 — Signed Evidence Export Packs API (Manual-Trigger, SHA-256)
+app.include_router(evidence_export_router)
 
 
 @app.on_event("startup")
