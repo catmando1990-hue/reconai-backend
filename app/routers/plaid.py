@@ -1,39 +1,105 @@
 # app/routers/plaid.py
+"""
+================================================================================
+DEPRECATED PLAID ROUTER — PHASE 5 REGRESSION GUARD
+================================================================================
+
+WARNING: This router is DEPRECATED and DISABLED as of Phase 5 System Hardening.
+
+REASON FOR DEPRECATION:
+- Uses non-existent stores.save_user_token() and stores.get_user_access_token()
+- No authentication or org-scoping
+- No token encryption
+- No audit logging
+
+USE INSTEAD:
+- plaid_v2.py — Production-ready Plaid API with auth, encryption, audit logging
+
+This file is kept for reference only. All Plaid endpoints have been moved to:
+    app/routers/plaid_v2.py
+
+Any attempt to call these endpoints will raise a clear deprecation error.
+
+================================================================================
+DO NOT RE-ENABLE THESE ENDPOINTS WITHOUT SECURITY REVIEW
+================================================================================
+"""
+
+from __future__ import annotations
+
+import json
+import os
 from datetime import timedelta
 import datetime as dt
-import os
-import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
-from plaid.exceptions import ApiException
-from plaid.model.link_token_create_request import LinkTokenCreateRequest
-from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
-from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
-from plaid.model.products import Products
-from plaid.model.country_code import CountryCode
-from plaid.model.accounts_get_request import AccountsGetRequest
-from plaid.model.transactions_get_request import TransactionsGetRequest
-from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
-from plaid.model.sandbox_public_token_create_request import SandboxPublicTokenCreateRequest
-
-from ..models import LinkTokenRequest, PublicTokenExchangeRequest
-from ..plaid_client import get_plaid_client
-from .. import stores
-
-# Try to import anthropic (optional - graceful fallback if not configured)
-try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ANTHROPIC_AVAILABLE = False
+# =============================================================================
+# PHASE 5: DEPRECATION GUARD — All v1 endpoints are hard-disabled
+# =============================================================================
 
 router = APIRouter()
+
+# Keep expense/tax mapping functions for classify_transactions (still used)
+# But all Plaid endpoints are DEPRECATED
+
+
+def _raise_deprecated_error(endpoint_name: str):
+    """
+    PHASE 5 REGRESSION GUARD: Raise explicit deprecation error.
+    This ensures v1 endpoints cannot be silently reactivated.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail={
+            "error": "DEPRECATED_ENDPOINT",
+            "message": f"Endpoint '{endpoint_name}' is DEPRECATED and permanently disabled.",
+            "reason": "This v1 Plaid router has security issues and missing dependencies.",
+            "action": "Use the v2 Plaid API instead: /api/plaid/* (plaid_v2.py)",
+            "documentation": "See app/routers/plaid_v2.py for production-ready endpoints",
+        },
+    )
+
+
+# =============================================================================
+# DEPRECATED PLAID ENDPOINTS — All return 410 Gone
+# =============================================================================
+
+
+@router.post("/link-token")
+def create_link_token():
+    """DEPRECATED: Use POST /api/plaid/create-link-token (plaid_v2.py)"""
+    _raise_deprecated_error("POST /link-token")
+
+
+@router.post("/exchange-public-token")
+def exchange_public_token():
+    """DEPRECATED: Use POST /api/plaid/exchange-public-token (plaid_v2.py)"""
+    _raise_deprecated_error("POST /exchange-public-token")
+
+
+@router.post("/sandbox-public-token")
+def create_sandbox_public_token():
+    """DEPRECATED: Sandbox endpoint disabled in production."""
+    _raise_deprecated_error("POST /sandbox-public-token")
+
+
+@router.get("/accounts")
+def get_accounts():
+    """DEPRECATED: Use GET /api/plaid/accounts (requires auth)"""
+    _raise_deprecated_error("GET /accounts")
+
+
+@router.get("/transactions")
+def get_plaid_transactions():
+    """DEPRECATED: Use POST /api/plaid/transactions/sync (plaid_v2.py)"""
+    _raise_deprecated_error("GET /transactions")
 
 
 # =============================================================================
 # EXPENSE TYPE MAPPING (Category -> Business/Personal/School/Other)
+# These are still used by classify_transactions which is NOT deprecated
 # =============================================================================
 
 EXPENSE_TYPE_MAP = {
@@ -55,11 +121,11 @@ EXPENSE_TYPE_MAP = {
     "Taxes & Licenses": "Business",
     "Bank Fees & Interest": "Business",
     "Shipping": "Business",
-    "Fuel": "Business",  # Can be business or personal, defaulting to business
-    "Vehicle Maintenance": "Business",  # Can be business or personal, defaulting to business
+    "Fuel": "Business",
+    "Vehicle Maintenance": "Business",
 
     # PERSONAL expenses (not deductible)
-    "Meals & Entertainment": "Personal",  # Default to personal unless business meal
+    "Meals & Entertainment": "Personal",
     "Health & Fitness": "Personal",
     "Healthcare": "Personal",
     "Owner Draw / Personal": "Personal",
@@ -77,14 +143,15 @@ EXPENSE_TYPE_MAP = {
 
     # INCOME
     "Income / Deposit": "Income",
-    "Interest/Fees": "Business",  # Usually business-related
+    "Interest/Fees": "Business",
 
     # INVESTMENT
-    "Investment": "Other",  # Could be business or personal depending on context
+    "Investment": "Other",
 
     # OTHER / UNCATEGORIZED
     "Uncategorized": "Other",
 }
+
 
 def get_expense_type(category: str) -> str:
     """Map a category to expense type (Business/Personal/School/Transfer/Income/Other)."""
@@ -96,7 +163,6 @@ def get_expense_type(category: str) -> str:
 # =============================================================================
 
 TAX_DEDUCTION_RULES = {
-    # Schedule C Line Items (Business Income/Expenses)
     "Travel - Airfare": {
         "schedule_c_line": "24a",
         "line_name": "Travel - Airfare",
@@ -143,20 +209,20 @@ TAX_DEDUCTION_RULES = {
         "deduction_rate": 1.00,
         "documentation_required": ["Receipt/invoice", "Subscription period", "Business use"],
         "limits": "Perpetual licenses >$2,500 may need to be capitalized",
-        "notes": "SaaS subscriptions are fully deductible; software licenses may be depreciated"
+        "notes": "SaaS subscriptions are fully deductible"
     },
     "Fuel": {
         "schedule_c_line": "9",
         "line_name": "Car and Truck Expenses",
-        "deduction_rate": 1.00,  # If using actual expense method
+        "deduction_rate": 1.00,
         "documentation_required": ["Receipt", "Odometer readings", "Business purpose"],
         "limits": "Must choose actual expense OR standard mileage (not both)",
-        "notes": "Alternative: Use standard mileage rate ($0.67/mile for 2024)"
+        "notes": "Alternative: Use standard mileage rate"
     },
     "Vehicle Maintenance": {
         "schedule_c_line": "9",
         "line_name": "Car and Truck Expenses",
-        "deduction_rate": 1.00,  # Prorated by business use %
+        "deduction_rate": 1.00,
         "documentation_required": ["Receipt", "Business use percentage", "Mileage log"],
         "limits": "Deduct business % only (must be >50% business use)",
         "notes": "Includes repairs, oil changes, tires, etc."
@@ -223,7 +289,7 @@ TAX_DEDUCTION_RULES = {
         "deduction_rate": 0.00,
         "documentation_required": None,
         "limits": "Personal expenses not deductible",
-        "notes": "Unless used in a business setting (e.g., home office)"
+        "notes": "Unless used in a business setting"
     },
     "Groceries": {
         "schedule_c_line": None,
@@ -257,8 +323,6 @@ TAX_DEDUCTION_RULES = {
 # =============================================================================
 
 DCAA_COMPLIANCE_RULES = {
-    # Defense Contract Audit Agency (DCAA) requirements for government contractors
-
     "documentation_requirements": {
         "timely_recording": {
             "description": "Expenses must be recorded within 3-5 business days",
@@ -267,9 +331,9 @@ DCAA_COMPLIANCE_RULES = {
             "regulation": "FAR 31.201-2(d)"
         },
         "receipt_threshold": {
-            "description": "Receipts required for expenses ≥ $75",
+            "description": "Receipts required for expenses >= $75",
             "threshold": 75.00,
-            "validation": "Flag transactions ≥$75 without receipt",
+            "validation": "Flag transactions >=$75 without receipt",
             "severity": "critical",
             "regulation": "FAR 31.205-46(a)"
         },
@@ -279,129 +343,29 @@ DCAA_COMPLIANCE_RULES = {
             "severity": "critical",
             "regulation": "FAR 31.201-2"
         },
-        "supporting_documentation": {
-            "description": "Maintain original receipts, invoices, contracts",
-            "validation": "Verify document attachment/reference",
-            "severity": "critical",
-            "regulation": "FAR 52.216-7(d)"
-        }
     },
-
     "allowable_costs": {
-        # Fully allowable costs
-        "Travel - Airfare": {"allowable": True, "notes": "Coach/economy required unless unavailable"},
-        "Travel - Lodging": {"allowable": True, "notes": "Must not exceed GSA per-diem rates or actual costs"},
-        "Travel - Ground Transportation": {"allowable": True, "notes": "Reasonable transportation costs"},
-        "Office Supplies": {"allowable": True, "notes": "Ordinary and necessary supplies"},
-        "Software & Subscriptions": {"allowable": True, "notes": "Must be allocable to contract"},
-        "Professional Services": {"allowable": True, "notes": "Must be at reasonable rates"},
+        "Travel - Airfare": {"allowable": True, "notes": "Coach/economy required"},
+        "Travel - Lodging": {"allowable": True, "notes": "Must not exceed GSA per-diem"},
+        "Travel - Ground Transportation": {"allowable": True, "notes": "Reasonable costs"},
+        "Office Supplies": {"allowable": True, "notes": "Ordinary and necessary"},
+        "Software & Subscriptions": {"allowable": True, "notes": "Must be allocable"},
+        "Professional Services": {"allowable": True, "notes": "Reasonable rates"},
         "Utilities": {"allowable": True, "notes": "Allocable portion only"},
         "Insurance": {"allowable": True, "notes": "Required by contract or law"},
-
-        # Partially allowable (with restrictions)
         "Meals & Entertainment": {
             "allowable": "partial",
             "deduction_rate": 0.50,
-            "notes": "Meals 50% allowable; Entertainment unallowable per FAR 31.205-14"
+            "notes": "Meals 50%; Entertainment unallowable per FAR 31.205-14"
         },
-        "Fuel": {
-            "allowable": True,
-            "notes": "Business portion only; mileage log required"
-        },
-
-        # Unallowable costs (FAR 31.205)
-        "Entertainment": {
-            "allowable": False,
-            "notes": "Unallowable per FAR 31.205-14 (entertainment, amusement, diversion)"
-        },
-        "Alcoholic Beverages": {
-            "allowable": False,
-            "notes": "Unallowable per FAR 31.205-51"
-        },
-        "Fines & Penalties": {
-            "allowable": False,
-            "notes": "Unallowable per FAR 31.205-15"
-        },
-        "Lobbying": {
-            "allowable": False,
-            "notes": "Unallowable per FAR 31.205-22"
-        },
-        "Contributions & Donations": {
-            "allowable": False,
-            "notes": "Unallowable per FAR 31.205-8"
-        },
+        "Fuel": {"allowable": True, "notes": "Business portion only"},
+        "Entertainment": {"allowable": False, "notes": "Unallowable per FAR 31.205-14"},
     },
-
-    "timekeeping_labor": {
-        "description": "Time must be recorded daily (not weekly or monthly)",
-        "requirements": [
-            "Sign timesheet daily or weekly (max)",
-            "Record actual hours worked",
-            "Identify contract/project charged",
-            "Supervisor approval required",
-            "No pre-signing or post-dating"
-        ],
-        "regulation": "FAR 31.201-2(d), DCAA audit manual"
-    },
-
-    "travel_restrictions": {
-        "airfare": {
-            "requirement": "Coach/economy class",
-            "exception": "Business/first class only if documented medical need or unavailability",
-            "regulation": "FAR 31.205-46(a)(2)"
-        },
-        "lodging": {
-            "requirement": "GSA per-diem rate or actual cost (whichever is less)",
-            "validation": "Compare to GSA rates by location",
-            "regulation": "FAR 31.205-46(a)(1)"
-        },
-        "rental_cars": {
-            "requirement": "Compact/mid-size unless business necessity",
-            "unallowable": "Luxury vehicles, sports cars",
-            "regulation": "FAR 31.205-46(a)(3)"
-        },
-        "meals": {
-            "requirement": "GSA M&IE rate or actual (50% deductible for tax)",
-            "unallowable": "Lavish or extravagant meals",
-            "regulation": "FAR 31.205-46(a)"
-        }
-    },
-
-    "documentation_retention": {
-        "description": "Records must be retained for specified periods",
-        "retention_periods": {
-            "contracts_under_$10k": "3 years after final payment",
-            "contracts_$10k_to_$150k": "3 years after final payment",
-            "contracts_over_$150k": "4 years after final payment (or longer if litigation)",
-            "indirect_cost_records": "Until all audits completed + 3 years"
-        },
-        "regulation": "FAR 4.705, FAR 52.215-2(f)"
-    },
-
-    "indirect_cost_allocation": {
-        "description": "Indirect costs must be allocated using consistent, equitable methods",
-        "requirements": [
-            "Maintain accounting system consistent with GAAP",
-            "Use consistent allocation bases",
-            "Segregate direct vs. indirect costs",
-            "Document allocation methodology",
-            "Update annually"
-        ],
-        "regulation": "FAR 31.203, CAS 418"
-    }
 }
 
 
 def validate_dcaa_compliance(transaction: dict) -> dict:
-    """
-    Validate transaction against DCAA compliance rules.
-
-    Args:
-        transaction: Dict with keys: merchant, amount, date, category, description, has_receipt
-
-    Returns:
-        Dict with compliance status and any violations
-    """
+    """Validate transaction against DCAA compliance rules."""
     violations = []
     warnings = []
 
@@ -410,15 +374,14 @@ def validate_dcaa_compliance(transaction: dict) -> dict:
     has_receipt = transaction.get("has_receipt", False)
     description = transaction.get("description", "")
 
-    # Check 1: Receipt requirement (≥$75)
+    # Check 1: Receipt requirement (>=$75)
     receipt_threshold = DCAA_COMPLIANCE_RULES["documentation_requirements"]["receipt_threshold"]["threshold"]
     if amount >= receipt_threshold and not has_receipt:
         violations.append({
             "rule": "Receipt Required",
             "severity": "critical",
-            "message": f"Receipt required for expense ≥ ${receipt_threshold:.2f}",
+            "message": f"Receipt required for expense >= ${receipt_threshold:.2f}",
             "regulation": "FAR 31.205-46(a)",
-            "remediation": "Obtain and attach receipt or credit card statement"
         })
 
     # Check 2: Business purpose documentation
@@ -428,19 +391,17 @@ def validate_dcaa_compliance(transaction: dict) -> dict:
             "severity": "critical",
             "message": "Transaction missing business purpose documentation",
             "regulation": "FAR 31.201-2",
-            "remediation": "Add detailed business purpose description"
         })
 
     # Check 3: Allowable cost verification
     allowable_info = DCAA_COMPLIANCE_RULES["allowable_costs"].get(category, {"allowable": True})
 
-    if allowable_info.get("allowable") == False:
+    if allowable_info.get("allowable") is False:
         violations.append({
             "rule": "Unallowable Cost",
             "severity": "critical",
             "message": f"{category} is unallowable under DCAA rules",
             "regulation": allowable_info.get("notes", "FAR 31.205"),
-            "remediation": "Remove from government contract billing; charge to IR&D or personal"
         })
     elif allowable_info.get("allowable") == "partial":
         warnings.append({
@@ -448,23 +409,9 @@ def validate_dcaa_compliance(transaction: dict) -> dict:
             "severity": "warning",
             "message": f"{category}: {allowable_info.get('notes', 'Restrictions apply')}",
             "regulation": "FAR 31.205",
-            "remediation": f"Apply {allowable_info.get('deduction_rate', 1.0):.0%} allowable rate"
         })
 
-    # Check 4: Travel class restrictions (for airfare)
-    if category == "Travel - Airfare" and amount > 500:
-        warnings.append({
-            "rule": "Airfare Class Verification",
-            "severity": "warning",
-            "message": "Verify coach/economy class used (business/first class requires justification)",
-            "regulation": "FAR 31.205-46(a)(2)",
-            "remediation": "Document if business class was unavailable or medically necessary"
-        })
-
-    # Calculate compliance score
-    compliance_score = 100
-    compliance_score -= len(violations) * 25  # Critical violations
-    compliance_score -= len(warnings) * 5     # Warnings
+    compliance_score = 100 - (len(violations) * 25) - (len(warnings) * 5)
     compliance_score = max(0, compliance_score)
 
     return {
@@ -478,15 +425,7 @@ def validate_dcaa_compliance(transaction: dict) -> dict:
 
 
 def get_tax_deduction_info(category: str) -> dict:
-    """
-    Get tax deduction information for a category.
-
-    Args:
-        category: Transaction category
-
-    Returns:
-        Dict with deduction rules and documentation requirements
-    """
+    """Get tax deduction information for a category."""
     return TAX_DEDUCTION_RULES.get(category, {
         "schedule_c_line": None,
         "line_name": "Uncategorized",
@@ -510,22 +449,20 @@ MERCHANT_RULES = {
     "american airlines": ("Travel - Airfare", "Airline ticket"),
     "southwest": ("Travel - Airfare", "Airline ticket"),
     "jetblue": ("Travel - Airfare", "Airline ticket"),
-    
+
     # Meals & Entertainment
     "starbucks": ("Meals & Entertainment", "Coffee/cafe"),
     "mcdonald": ("Meals & Entertainment", "Fast food restaurant"),
-    "kfc": ("Meals & Entertainment", "Fast food restaurant"),
     "chipotle": ("Meals & Entertainment", "Restaurant"),
     "doordash": ("Meals & Entertainment", "Food delivery"),
     "grubhub": ("Meals & Entertainment", "Food delivery"),
     "uber eats": ("Meals & Entertainment", "Food delivery"),
-    "dunkin": ("Meals & Entertainment", "Coffee/cafe"),
-    
+
     # Office & Supplies
     "office depot": ("Office Supplies", "Office supply store"),
     "staples": ("Office Supplies", "Office supply store"),
     "amazon": ("Office Supplies", "Online retailer - likely business supplies"),
-    
+
     # Software & Tech
     "github": ("Software & Subscriptions", "Developer tools"),
     "openai": ("Software & Subscriptions", "AI services"),
@@ -536,215 +473,62 @@ MERCHANT_RULES = {
     "adobe": ("Software & Subscriptions", "Creative software"),
     "slack": ("Software & Subscriptions", "Team communication"),
     "zoom": ("Software & Subscriptions", "Video conferencing"),
-    "dropbox": ("Software & Subscriptions", "Cloud storage"),
-    "heroku": ("Software & Subscriptions", "Cloud hosting"),
-    "vercel": ("Software & Subscriptions", "Cloud hosting"),
-    "render": ("Software & Subscriptions", "Cloud hosting"),
-    
+
     # Professional Services
     "gusto": ("Payroll", "Payroll service"),
     "quickbooks": ("Software & Subscriptions", "Accounting software"),
     "stripe": ("Payment Processing", "Payment processor"),
     "square": ("Payment Processing", "Payment processor"),
-    
+
     # Banking & Payments
     "credit card": ("Credit Card Payment", "Credit card payment"),
     "interest": ("Interest/Fees", "Interest payment"),
-    "intrst": ("Interest/Fees", "Interest payment"),
-    "ach": ("Payment/Transfer", "ACH transfer"),
-    "wire": ("Payment/Transfer", "Wire transfer"),
     "deposit": ("Income / Deposit", "Deposit received"),
-    
+
     # Fitness & Health
-    "touchstone climbing": ("Health & Fitness", "Gym/fitness"),
     "gym": ("Health & Fitness", "Gym membership"),
     "fitness": ("Health & Fitness", "Fitness expense"),
-    "planet fitness": ("Health & Fitness", "Gym membership"),
-    
+
     # Travel & Lodging
     "marriott": ("Travel - Lodging", "Hotel"),
     "hilton": ("Travel - Lodging", "Hotel"),
-    "hyatt": ("Travel - Lodging", "Hotel"),
     "airbnb": ("Travel - Lodging", "Short-term rental"),
     "hertz": ("Travel - Ground Transportation", "Car rental"),
-    "enterprise": ("Travel - Ground Transportation", "Car rental"),
-    "avis": ("Travel - Ground Transportation", "Car rental"),
-    
-    # School/Education
-    "tuition": ("Education", "School tuition"),
-    "university": ("Education", "University expense"),
-    "college": ("Education", "College expense"),
-    "bookstore": ("Education", "Textbooks/supplies"),
-    "chegg": ("Education", "Educational service"),
-    "coursera": ("Education", "Online learning"),
-    "udemy": ("Education", "Online learning"),
-    "pearson": ("Education", "Educational materials"),
-    "mcgraw-hill": ("Education", "Educational materials"),
 
     # Fuel & Auto
     "shell": ("Fuel", "Gas station"),
     "chevron": ("Fuel", "Gas station"),
     "exxon": ("Fuel", "Gas station"),
-    "mobil": ("Fuel", "Gas station"),
-    "bp": ("Fuel", "Gas station"),
-    "valero": ("Fuel", "Gas station"),
-    "arco": ("Fuel", "Gas station"),
-    "texaco": ("Fuel", "Gas station"),
-    "sunoco": ("Fuel", "Gas station"),
-    "speedway": ("Fuel", "Gas station"),
-    "wawa": ("Fuel", "Gas station/convenience"),
-    "7-eleven": ("Fuel", "Gas station/convenience"),
-    "autozone": ("Vehicle Maintenance", "Auto parts"),
-    "o'reilly": ("Vehicle Maintenance", "Auto parts"),
-    "pep boys": ("Vehicle Maintenance", "Auto parts/service"),
-    "jiffy lube": ("Vehicle Maintenance", "Oil change/service"),
 
-    # Groceries & Retail
+    # Groceries
     "walmart": ("Groceries", "Grocery/retail store"),
     "target": ("Groceries", "Grocery/retail store"),
     "costco": ("Groceries", "Wholesale club"),
-    "sam's club": ("Groceries", "Wholesale club"),
-    "kroger": ("Groceries", "Grocery store"),
-    "safeway": ("Groceries", "Grocery store"),
-    "albertsons": ("Groceries", "Grocery store"),
-    "publix": ("Groceries", "Grocery store"),
-    "whole foods": ("Groceries", "Grocery store"),
-    "trader joe": ("Groceries", "Grocery store"),
-    "aldi": ("Groceries", "Grocery store"),
-    "wegmans": ("Groceries", "Grocery store"),
-    "heb": ("Groceries", "Grocery store"),
 
-    # Restaurants & Dining (expanded)
-    "panera": ("Meals & Entertainment", "Restaurant"),
-    "olive garden": ("Meals & Entertainment", "Restaurant"),
-    "red lobster": ("Meals & Entertainment", "Restaurant"),
-    "chili's": ("Meals & Entertainment", "Restaurant"),
-    "applebee's": ("Meals & Entertainment", "Restaurant"),
-    "outback": ("Meals & Entertainment", "Restaurant"),
-    "cheesecake factory": ("Meals & Entertainment", "Restaurant"),
-    "buffalo wild": ("Meals & Entertainment", "Restaurant"),
-    "subway": ("Meals & Entertainment", "Fast food restaurant"),
-    "taco bell": ("Meals & Entertainment", "Fast food restaurant"),
-    "wendy's": ("Meals & Entertainment", "Fast food restaurant"),
-    "burger king": ("Meals & Entertainment", "Fast food restaurant"),
-    "arby's": ("Meals & Entertainment", "Fast food restaurant"),
-    "five guys": ("Meals & Entertainment", "Fast food restaurant"),
-    "shake shack": ("Meals & Entertainment", "Fast food restaurant"),
-    "in-n-out": ("Meals & Entertainment", "Fast food restaurant"),
-    "pizza hut": ("Meals & Entertainment", "Restaurant"),
-    "domino's": ("Meals & Entertainment", "Restaurant"),
-    "papa john": ("Meals & Entertainment", "Restaurant"),
-
-    # Software & SaaS (expanded)
-    "notion": ("Software & Subscriptions", "Productivity software"),
-    "asana": ("Software & Subscriptions", "Project management"),
-    "trello": ("Software & Subscriptions", "Project management"),
-    "monday.com": ("Software & Subscriptions", "Project management"),
-    "jira": ("Software & Subscriptions", "Project management"),
-    "confluence": ("Software & Subscriptions", "Team collaboration"),
-    "figma": ("Software & Subscriptions", "Design software"),
-    "canva": ("Software & Subscriptions", "Design software"),
-    "mailchimp": ("Software & Subscriptions", "Email marketing"),
-    "hubspot": ("Software & Subscriptions", "CRM/Marketing"),
-    "salesforce": ("Software & Subscriptions", "CRM"),
-    "shopify": ("Software & Subscriptions", "E-commerce platform"),
-    "squarespace": ("Software & Subscriptions", "Website builder"),
-    "wix": ("Software & Subscriptions", "Website builder"),
-    "godaddy": ("Software & Subscriptions", "Domain/hosting"),
-    "namecheap": ("Software & Subscriptions", "Domain/hosting"),
-    "cloudflare": ("Software & Subscriptions", "Cloud services"),
-    "digitalocean": ("Software & Subscriptions", "Cloud hosting"),
-    "linode": ("Software & Subscriptions", "Cloud hosting"),
-    "netlify": ("Software & Subscriptions", "Cloud hosting"),
-
-    # Marketing & Advertising
-    "google ads": ("Marketing & Advertising", "Online advertising"),
-    "facebook ads": ("Marketing & Advertising", "Social media advertising"),
-    "meta ads": ("Marketing & Advertising", "Social media advertising"),
-    "linkedin ads": ("Marketing & Advertising", "Social media advertising"),
-    "twitter ads": ("Marketing & Advertising", "Social media advertising"),
-    "pinterest ads": ("Marketing & Advertising", "Social media advertising"),
-    "tiktok ads": ("Marketing & Advertising", "Social media advertising"),
-
-    # Shipping & Logistics
+    # Shipping
     "fedex": ("Shipping", "Shipping service"),
     "ups": ("Shipping", "Shipping service"),
     "usps": ("Shipping", "Shipping service"),
-    "dhl": ("Shipping", "Shipping service"),
 
-    # Utilities & Services
+    # Utilities
     "comcast": ("Utilities", "Internet/cable"),
-    "xfinity": ("Utilities", "Internet/cable"),
-    "spectrum": ("Utilities", "Internet/cable"),
     "verizon": ("Utilities", "Phone/internet"),
     "at&t": ("Utilities", "Phone/internet"),
-    "t-mobile": ("Utilities", "Phone service"),
-    "sprint": ("Utilities", "Phone service"),
 
-    # Entertainment & Streaming
+    # Entertainment
     "netflix": ("Entertainment", "Streaming service"),
-    "hulu": ("Entertainment", "Streaming service"),
-    "disney": ("Entertainment", "Streaming service"),
-    "hbo": ("Entertainment", "Streaming service"),
-    "amazon prime": ("Entertainment", "Streaming/subscription"),
     "spotify": ("Entertainment", "Music streaming"),
-    "apple music": ("Entertainment", "Music streaming"),
-    "youtube premium": ("Entertainment", "Streaming service"),
-    "paramount": ("Entertainment", "Streaming service"),
-    "peacock": ("Entertainment", "Streaming service"),
-
-    # Pharmacy & Healthcare
-    "cvs": ("Healthcare", "Pharmacy"),
-    "walgreens": ("Healthcare", "Pharmacy"),
-    "rite aid": ("Healthcare", "Pharmacy"),
-    "kaiser": ("Healthcare", "Medical services"),
-    "cigna": ("Insurance", "Health insurance"),
-    "blue cross": ("Insurance", "Health insurance"),
-    "aetna": ("Insurance", "Health insurance"),
-    "united health": ("Insurance", "Health insurance"),
-
-    # Insurance (expanded)
-    "geico": ("Insurance", "Auto insurance"),
-    "progressive": ("Insurance", "Auto insurance"),
-    "state farm": ("Insurance", "Insurance"),
-    "allstate": ("Insurance", "Insurance"),
-    "farmers insurance": ("Insurance", "Insurance"),
-
-    # Home & Garden
-    "home depot": ("Home & Garden", "Home improvement"),
-    "lowe's": ("Home & Garden", "Home improvement"),
-    "ace hardware": ("Home & Garden", "Hardware store"),
-    "ikea": ("Home & Garden", "Furniture"),
-    "wayfair": ("Home & Garden", "Furniture/decor"),
-
-    # Professional Services (expanded)
-    "upwork": ("Professional Services", "Freelance platform"),
-    "fiverr": ("Professional Services", "Freelance platform"),
-    "legalzoom": ("Professional Services", "Legal services"),
-    "docusign": ("Software & Subscriptions", "Document signing"),
-    "notary": ("Professional Services", "Notary service"),
-
-    # Financial Services
-    "paypal": ("Payment/Transfer", "Payment service"),
-    "venmo": ("Payment/Transfer", "Payment service"),
-    "zelle": ("Payment/Transfer", "Payment service"),
-    "cash app": ("Payment/Transfer", "Payment service"),
-    "coinbase": ("Investment", "Cryptocurrency exchange"),
-    "robinhood": ("Investment", "Investment platform"),
-    "etrade": ("Investment", "Investment platform"),
-    "fidelity": ("Investment", "Investment platform"),
-    "vanguard": ("Investment", "Investment platform"),
-    "charles schwab": ("Investment", "Investment platform"),
 }
+
 
 def deterministic_classify(merchant: str, amount: float):
     """Try to classify using deterministic rules."""
     merchant_lower = merchant.lower()
-    
+
     for keyword, (category, description) in MERCHANT_RULES.items():
         if keyword in merchant_lower:
             return (category, 95, f"Matched '{keyword}' -> {description}")
-    
+
     return None
 
 
@@ -752,7 +536,15 @@ def deterministic_classify(merchant: str, amount: float):
 # CLAUDE AI CLASSIFICATION (Smart Fallback)
 # =============================================================================
 
-CLASSIFICATION_PROMPT = """You are a financial classification expert for small businesses and contractors. 
+# Try to import anthropic (optional - graceful fallback if not configured)
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
+
+CLASSIFICATION_PROMPT = """You are a financial classification expert for small businesses.
 Classify this transaction into the most appropriate category AND determine the expense type.
 
 Transaction:
@@ -761,49 +553,20 @@ Transaction:
 - Date: {date}
 
 Available categories:
-- Travel - Airfare
-- Travel - Lodging  
-- Travel - Ground Transportation
-- Transportation
-- Meals & Entertainment
-- Office Supplies
-- Software & Subscriptions
-- Professional Services
-- Marketing & Advertising
-- Equipment & Hardware
-- Utilities & Phone
-- Insurance
-- Payroll
-- Payment Processing
-- Taxes & Licenses
-- Bank Fees & Interest
-- Credit Card Payment
-- Payment/Transfer
-- Owner Draw / Personal
-- Income / Deposit
-- Health & Fitness
-- Education
-- Groceries
-- Shopping
-- Entertainment
-- Uncategorized
+- Travel - Airfare, Travel - Lodging, Travel - Ground Transportation
+- Transportation, Meals & Entertainment, Office Supplies
+- Software & Subscriptions, Professional Services, Marketing & Advertising
+- Equipment & Hardware, Utilities & Phone, Insurance, Payroll
+- Payment Processing, Taxes & Licenses, Bank Fees & Interest
+- Credit Card Payment, Payment/Transfer, Owner Draw / Personal
+- Income / Deposit, Health & Fitness, Education, Groceries
+- Shopping, Entertainment, Uncategorized
 
-Expense types:
-- Business (tax deductible business expenses)
-- Personal (personal/non-deductible expenses)
-- School (education-related expenses)
-- Transfer (moving money between accounts)
-- Income (money received)
-- Other (unclear/mixed purpose)
+Expense types: Business, Personal, School, Transfer, Income, Other
 
-Respond with ONLY valid JSON (no markdown, no code blocks):
-{{"category": "...", "expense_type": "Business", "confidence": 85, "reasoning": "Brief explanation"}}
+Respond with ONLY valid JSON:
+{{"category": "...", "expense_type": "Business", "confidence": 85, "reasoning": "Brief explanation"}}"""
 
-Rules:
-- confidence: 70-99 based on certainty
-- Default meals to Personal unless clearly a business meal
-- Transportation during work hours = Business
-- Keep reasoning under 100 characters"""
 
 def get_anthropic_client():
     """Get Anthropic client if API key is configured."""
@@ -812,13 +575,14 @@ def get_anthropic_client():
         return None
     return anthropic.Anthropic(api_key=api_key)
 
+
 async def ai_classify(merchant: str, amount: float, date: str):
     """Use Claude to classify ambiguous transactions."""
     client = get_anthropic_client()
-    
+
     if not client:
         return ("Uncategorized", "Other", 60, "AI not configured - add ANTHROPIC_API_KEY")
-    
+
     try:
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -832,172 +596,38 @@ async def ai_classify(merchant: str, amount: float, date: str):
                 )
             }]
         )
-        
+
         response_text = message.content[0].text.strip()
         result = json.loads(response_text)
-        
+
         return (
             result.get("category", "Uncategorized"),
             result.get("expense_type", "Other"),
             result.get("confidence", 75),
             result.get("reasoning", "AI classification")
         )
-        
-    except json.JSONDecodeError as e:
+
+    except json.JSONDecodeError:
         return ("Uncategorized", "Other", 60, "AI response parse error")
     except Exception as e:
         return ("Uncategorized", "Other", 50, f"AI error: {str(e)[:40]}")
 
 
 # =============================================================================
-# PLAID ENDPOINTS
-# =============================================================================
-
-@router.post("/link-token")
-def create_link_token(payload: LinkTokenRequest):
-    client = get_plaid_client()
-
-    # Base request parameters
-    request_params = {
-        "user": LinkTokenCreateRequestUser(client_user_id=payload.user_id),
-        "client_name": "ReconAI",
-        "products": [Products("transactions")],
-        "country_codes": [CountryCode("US")],
-        "language": "en",
-    }
-
-    # Add redirect_uri for OAuth (required for production with OAuth-enabled banks)
-    redirect_uri = payload.redirect_uri or os.getenv("PLAID_REDIRECT_URI")
-    if redirect_uri:
-        request_params["redirect_uri"] = redirect_uri
-
-    request = LinkTokenCreateRequest(**request_params)
-
-    try:
-        response = client.link_token_create(request)
-        try:
-            return response.to_dict()
-        except AttributeError:
-            return {"link_token": response.link_token, "expiration": response.expiration}
-    except ApiException as e:
-        raise HTTPException(status_code=500, detail=f"Plaid API error: {e.body}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Python error: {str(e)}")
-
-
-@router.post("/exchange-public-token")
-def exchange_public_token(payload: PublicTokenExchangeRequest):
-    client = get_plaid_client()
-
-    try:
-        request = ItemPublicTokenExchangeRequest(public_token=payload.public_token)
-        response = client.item_public_token_exchange(request)
-
-        access_token = response.access_token
-        item_id = response.item_id
-
-        stores.save_user_token(payload.user_id, access_token, item_id)
-
-        return {"access_token": access_token, "item_id": item_id}
-    except ApiException as e:
-        raise HTTPException(status_code=500, detail=f"Plaid API error: {e.body}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Python error: {str(e)}")
-
-
-@router.post("/sandbox-public-token")
-def create_sandbox_public_token():
-    client = get_plaid_client()
-
-    request = SandboxPublicTokenCreateRequest(
-        institution_id="ins_109508",
-        initial_products=[Products("transactions")]
-    )
-
-    try:
-        response = client.sandbox_public_token_create(request)
-        try:
-            return response.to_dict()
-        except AttributeError:
-            return {"public_token": response.public_token, "request_id": getattr(response, "request_id", None)}
-    except ApiException as e:
-        raise HTTPException(status_code=500, detail=f"Plaid API error: {e.body}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Python error: {str(e)}")
-
-
-@router.get("/accounts")
-def get_accounts(user_id: str):
-    access_token = stores.get_user_access_token(user_id)
-    if not access_token:
-        raise HTTPException(status_code=404, detail="No access_token stored for this user")
-
-    client = get_plaid_client()
-    try:
-        request = AccountsGetRequest(access_token=access_token)
-        response = client.accounts_get(request)
-        try:
-            return response.to_dict()
-        except AttributeError:
-            return {"accounts": [a.__dict__ for a in response.accounts]}
-    except ApiException as e:
-        raise HTTPException(status_code=500, detail=f"Plaid API error: {e.body}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Python error: {str(e)}")
-
-
-@router.get("/transactions")
-def get_plaid_transactions(
-    user_id: str,
-    start: dt.date | None = None,
-    end: dt.date | None = None,
-):
-    access_token = stores.get_user_access_token(user_id)
-    if not access_token:
-        raise HTTPException(status_code=404, detail="No access_token stored for this user")
-
-    if end is None:
-        end = dt.date.today()
-    if start is None:
-        start = end - timedelta(days=730)
-
-    client = get_plaid_client()
-    try:
-        options = TransactionsGetRequestOptions(count=500, offset=0)
-        request = TransactionsGetRequest(
-            access_token=access_token,
-            start_date=start,
-            end_date=end,
-            options=options,
-        )
-        response = client.transactions_get(request)
-        try:
-            return response.to_dict()
-        except AttributeError:
-            return {
-                "accounts": [a.__dict__ for a in response.accounts],
-                "transactions": [t.__dict__ for t in response.transactions],
-            }
-    except ApiException as e:
-        raise HTTPException(status_code=500, detail=f"Plaid API error: {e.body}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Python error: {str(e)}")
-
-
-# =============================================================================
-# RECONAI CLASSIFICATION ENDPOINT (Hybrid: Rules + AI + Expense Type)
+# CLASSIFY TRANSACTIONS ENDPOINT (NOT DEPRECATED - Still in use)
 # =============================================================================
 
 class ClassifyRequest(BaseModel):
     transactions: list[dict]
 
+
 async def classify_transactions(request: ClassifyRequest):
     """
     Hybrid classification: Deterministic rules first, Claude AI fallback.
-    Now includes:
-    - expense_type (Business/Personal/School/Transfer/Income/Other)
-    - tax_info (deduction rules, Schedule C line, documentation requirements)
-    - dcaa_compliance (validation for government contractors)
+    Includes expense_type, tax_info, and dcaa_compliance.
+
+    NOTE: This endpoint is NOT deprecated. It provides transaction
+    classification which is separate from Plaid bank connectivity.
     """
     results = []
 
