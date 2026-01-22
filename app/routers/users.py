@@ -5,9 +5,16 @@ from typing import Optional, Dict, Any
 import sqlite3
 from datetime import datetime
 import json
+from uuid import uuid4
 
 from app.auth_context import get_current_user_id
 from app.settings.contract import SETTINGS_CONTRACT_VERSION, wrap_settings_response
+from app.settings.audit import (
+    audit_notification_settings_change,
+    audit_profile_change,
+    audit_data_export,
+    audit_account_deletion,
+)
 
 router = APIRouter(prefix="/api/user", tags=["users"])
 
@@ -339,13 +346,40 @@ async def update_notification_settings(
     - lifecycle: ALWAYS present
     - metadata: ALWAYS present
 
+    AUDIT:
+    - previous_value: ALWAYS captured
+    - request_id: ALWAYS stored
+
     Updates notification settings. Only provided fields will be updated.
     """
+    request_id = str(uuid4())
+
     try:
         from app.db import get_db_connection
 
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        # CAPTURE previous_value BEFORE mutation (AUDIT REQUIREMENT)
+        cursor.execute("""
+            SELECT
+                email_notifications, transaction_alerts, compliance_alerts,
+                invoice_reminders, weekly_summary, monthly_report
+            FROM users
+            WHERE user_id = ?
+        """, (current_user_id,))
+        prev_row = cursor.fetchone()
+
+        previous_settings = None
+        if prev_row:
+            previous_settings = {
+                "email_notifications": bool(prev_row[0]) if prev_row[0] is not None else True,
+                "transaction_alerts": bool(prev_row[1]) if prev_row[1] is not None else True,
+                "compliance_alerts": bool(prev_row[2]) if prev_row[2] is not None else True,
+                "invoice_reminders": bool(prev_row[3]) if prev_row[3] is not None else True,
+                "weekly_summary": bool(prev_row[4]) if prev_row[4] is not None else True,
+                "monthly_report": bool(prev_row[5]) if prev_row[5] is not None else True,
+            }
 
         # Build update query dynamically
         updates = []
@@ -401,13 +435,27 @@ async def update_notification_settings(
             monthly_report=bool(row[5]) if row[5] is not None else True
         )
 
+        new_settings = notifications.model_dump()
+
+        # EMIT AUDIT EVENT (never blocks request on failure)
+        try:
+            audit_notification_settings_change(
+                request_id=request_id,
+                user_id=current_user_id,
+                previous_settings=previous_settings or {},
+                new_settings=new_settings,
+            )
+        except Exception:
+            pass  # Audit should not block the request
+
         return wrap_settings_response(
             ok=True,
             sources=["users"],
             scope="user",
             last_modified_at=now,
             modified_by=current_user_id,
-            notifications=notifications.model_dump(),
+            request_id=request_id,
+            notifications=new_settings,
         )
 
     except Exception as e:
@@ -430,7 +478,13 @@ async def export_user_data(
 
     Returns all data associated with the user in JSON format.
     Required for GDPR and CCPA compliance.
+
+    AUDIT:
+    - request_id: ALWAYS stored
+    - Export type recorded
     """
+    request_id = str(uuid4())
+
     try:
         from app.db import get_db_connection
 
@@ -440,6 +494,7 @@ async def export_user_data(
         data_export = {
             "user_id": current_user_id,
             "export_date": datetime.now().isoformat(),
+            "request_id": request_id,
             "data": {}
         }
 
@@ -475,6 +530,17 @@ async def export_user_data(
 
         conn.close()
 
+        # EMIT AUDIT EVENT (never blocks request on failure)
+        try:
+            audit_data_export(
+                request_id=request_id,
+                user_id=current_user_id,
+                export_type="full",
+                metadata={"sections": list(data_export["data"].keys())},
+            )
+        except Exception:
+            pass  # Audit should not block the request
+
         return JSONResponse(
             content=data_export,
             headers={
@@ -500,14 +566,30 @@ async def delete_user_account(
     This is irreversible. All user data will be deleted.
     Required for GDPR and CCPA compliance.
 
+    AUDIT:
+    - request_id: ALWAYS stored
+    - Deletion event recorded BEFORE deletion
+
     Args:
         confirmation: Must be "DELETE" to confirm
     """
+    request_id = str(uuid4())
+
     if confirmation != "DELETE":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Confirmation must be 'DELETE' to proceed with account deletion"
         )
+
+    # EMIT AUDIT EVENT BEFORE deletion (critical for compliance)
+    try:
+        audit_account_deletion(
+            request_id=request_id,
+            user_id=current_user_id,
+            metadata={"confirmation_received": True},
+        )
+    except Exception:
+        pass  # Audit should not block the request
 
     try:
         from app.db import get_db_connection
@@ -537,7 +619,8 @@ async def delete_user_account(
         return {
             "success": True,
             "message": "Account permanently deleted",
-            "deleted_at": datetime.now().isoformat()
+            "deleted_at": datetime.now().isoformat(),
+            "request_id": request_id,
         }
 
     except Exception as e:

@@ -35,6 +35,7 @@ from pydantic import BaseModel
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
 from app.settings.contract import SETTINGS_CONTRACT_VERSION, wrap_settings_response
+from app.settings.audit import audit_financial_controls_change
 from .billing_rbac import get_billing_actor, require_billing_permission
 
 router = APIRouter(tags=["billing-controls"])
@@ -209,6 +210,10 @@ async def update_financial_controls(
     - lifecycle: ALWAYS present
     - metadata: ALWAYS present
 
+    AUDIT:
+    - previous_value: ALWAYS captured
+    - request_id: ALWAYS stored
+
     Manual invocation only - no auto-enforcement.
     RBAC: manage_roles permission required (owner, billing_admin).
     Audit-logged for compliance.
@@ -222,8 +227,11 @@ async def update_financial_controls(
     actor = get_billing_actor(user_id, org_id)
     require_billing_permission(actor, "manage_roles", request_id)
 
-    # Get current controls
-    current = _get_financial_controls(org_id)
+    # CAPTURE previous_value BEFORE mutation (AUDIT REQUIREMENT)
+    previous_controls = _get_financial_controls(org_id)
+
+    # Get current controls (copy for modification)
+    current = dict(previous_controls)
 
     # Apply updates (only non-None values)
     if payload.soft_spending_limit is not None:
@@ -247,7 +255,19 @@ async def update_financial_controls(
             }
         )
 
-    # Audit log
+    # EMIT AUDIT EVENT with previous_value (never blocks request on failure)
+    try:
+        audit_financial_controls_change(
+            request_id=request_id,
+            actor_id=user_id,
+            org_id=org_id,
+            previous_controls=previous_controls,
+            new_controls=current,
+        )
+    except Exception:
+        pass  # Audit should not block the request
+
+    # Legacy audit log (kept for backward compatibility)
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("""
@@ -257,7 +277,7 @@ async def update_financial_controls(
                 request_id,
                 "BILLING_FINANCIAL_CONTROLS_UPDATED",
                 user_id,
-                json.dumps({"controls": current}),
+                json.dumps({"controls": current, "previous": previous_controls}),
             ))
             conn.commit()
     except Exception:
