@@ -45,6 +45,28 @@ from .cfo_state_factory import (
     financial_exception_factory,
 )
 
+from .intelligence_state_factory import (
+    # Schema assertion
+    IntelligenceSchemaValidationError,
+    assert_valid_intelligence_state,
+    # Evidence and lifecycle builders
+    evidence_factory as intelligence_evidence_factory,
+    empty_evidence as intelligence_empty_evidence,
+    lifecycle_factory as intelligence_lifecycle_factory,
+    # Classification builders
+    classification_result_factory,
+    # Intelligence Classify factories
+    intelligence_classify_factory,
+    success_intelligence_classify,
+    partial_intelligence_classify,
+    failed_intelligence_classify,
+    no_data_intelligence_classify,
+    low_confidence_intelligence_classify,
+    # Intelligence Overlay factories
+    intelligence_overlay_factory,
+    success_intelligence_overlay,
+)
+
 __all__ = [
     # Core State
     "SchemaValidationError",
@@ -73,4 +95,19 @@ __all__ = [
     "cfo_exceptions_factory",
     "success_cfo_exceptions",
     "financial_exception_factory",
+    # Intelligence State
+    "IntelligenceSchemaValidationError",
+    "assert_valid_intelligence_state",
+    "intelligence_evidence_factory",
+    "intelligence_empty_evidence",
+    "intelligence_lifecycle_factory",
+    "classification_result_factory",
+    "intelligence_classify_factory",
+    "success_intelligence_classify",
+    "partial_intelligence_classify",
+    "failed_intelligence_classify",
+    "no_data_intelligence_classify",
+    "low_confidence_intelligence_classify",
+    "intelligence_overlay_factory",
+    "success_intelligence_overlay",
 ]

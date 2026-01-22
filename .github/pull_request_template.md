@@ -8,7 +8,7 @@
 
 ## Contract Changes
 
-<!-- If you modified /api/core/state or /api/cfo/*, check these boxes -->
+<!-- If you modified /api/core/state, /api/cfo/*, or /api/intelligence/*, check these boxes -->
 
 ### CORE State Contract
 
@@ -27,6 +27,15 @@
   - [ ] All tests still pass with `assert_valid_cfo_state()`
   - [ ] Coordinated with frontend team on schema changes
   - [ ] Updated `VALID_CFO_LIFECYCLE_STATUSES` if enum changed
+
+### Intelligence Contract
+
+- [ ] Did `/api/intelligence/*` contract change? If yes:
+  - [ ] Updated `tests/fixtures/intelligence_state_factory.py` to match new schema
+  - [ ] Updated `INTELLIGENCE_CONTRACT_VERSION` if breaking change
+  - [ ] All tests still pass with `assert_valid_intelligence_state()`
+  - [ ] Coordinated with frontend team on schema changes
+  - [ ] Updated `VALID_LIFECYCLE_STATUSES` if enum changed
 
 ## Risk Level
 
