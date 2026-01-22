@@ -53,15 +53,39 @@ router = APIRouter(prefix="/api/core", tags=["core"])
 # =============================================================================
 
 
+class SyncLifecycleResponse(BaseModel):
+    """
+    Explicit sync lifecycle for frontend state machines.
+
+    STATUS VALUES:
+    - 'never': No sync has ever been attempted
+    - 'running': Sync is currently in progress
+    - 'success': Last sync completed successfully
+    - 'failed': Last sync failed or was partial
+
+    FRONTEND USAGE:
+    - If status='running', show spinner
+    - If status='failed', show error with error_reason
+    - Use sync_started_at to calculate elapsed time for running syncs
+    """
+    status: str  # 'never' | 'running' | 'success' | 'failed'
+    sync_started_at: Optional[str] = None  # ISO datetime, only set when status='running'
+    last_completed_at: Optional[str] = None  # ISO datetime of last completion (success or fail)
+    last_successful_at: Optional[str] = None  # ISO datetime of last FULL success
+    error_reason: Optional[str] = None  # Only set when status='failed'
+    request_id: Optional[str] = None  # Current or last request ID
+
+
 class CoreSyncMetadataResponse(BaseModel):
-    """Sync metadata response."""
+    """Sync metadata response (full details)."""
     organization_id: str
     last_synced_at: Optional[str]
     last_successful_sync_at: Optional[str]
     last_sync_request_id: Optional[str]
     transactions_synced: Optional[int]
     entities_derived: Optional[int]
-    sync_status: str  # 'never', 'success', 'failed', 'syncing'
+    sync_status: str  # 'never' | 'running' | 'success' | 'failed'
+    sync_started_at: Optional[str] = None  # ISO datetime when sync began
     error_message: Optional[str]
 
 
@@ -104,22 +128,42 @@ class StalenessInfo(BaseModel):
     auto_retry_scheduled: bool = False
 
 
+class RecentEvidenceResponse(BaseModel):
+    """
+    Lightweight evidence of recent changes.
+
+    Bounded to ≤3 items each for performance.
+    Used by frontend to show "what changed" in tooltips/modals.
+    """
+    recent_transactions: list = []  # ≤3 most recent transactions
+    recent_entity_changes: list = []  # ≤3 most recent entity changes (placeholder for future)
+
+
 class CoreStateResponse(BaseModel):
     """
     Complete CORE state response.
 
     This is the SINGLE SOURCE OF TRUTH for dashboard data.
     All frontend metrics MUST come from this structure.
+
+    STRUCTURE:
+    - sync: Explicit lifecycle object for frontend state machines
+    - staleness: Whether data is stale and why
+    - sync_metadata: Full sync details (for debugging/admin)
+    - metrics: Derived metrics (null = unknown, NEVER 0)
+    - evidence: Lightweight recent changes (≤3 items each)
     """
     success: bool
     request_id: str
     organization_id: str
     available: bool  # True if we have any data to show
+    sync: SyncLifecycleResponse  # NEW: Explicit lifecycle object
     staleness: StalenessInfo
     sync_metadata: CoreSyncMetadataResponse
     metrics: CoreMetricsResponse
+    evidence: RecentEvidenceResponse  # NEW: Recent changes evidence
     plaid_items: list
-    recent_transactions: list
+    recent_transactions: list  # Full list (up to 20)
     customer_summary: Optional[Dict[str, Any]] = None
     vendor_summary: Optional[Dict[str, Any]] = None
     invoice_summary: Optional[Dict[str, Any]] = None
@@ -173,12 +217,17 @@ def _compute_staleness(state: CoreState) -> tuple[bool, Optional[str]]:
         (is_stale, stale_reason)
 
     RULES:
+    - If sync_status == 'running' → stale=false (sync in progress)
     - If last_successful_sync_at is null → stale=true
     - If now - last_successful_sync_at > STALE_THRESHOLD → stale=true
     - If sync_status == 'failed' → stale=true
     - Otherwise → stale=false
     """
     metadata = state.sync_metadata
+
+    # Rule 0: Sync in progress - not stale
+    if metadata.sync_status == 'running':
+        return False, None
 
     # Rule 1: Never synced
     if metadata.last_successful_sync_at is None:
@@ -288,6 +337,16 @@ async def get_core_state(
             auto_retry_scheduled=auto_retry_scheduled,
         )
 
+        # Build sync lifecycle object (explicit for frontend state machines)
+        sync_lifecycle = SyncLifecycleResponse(
+            status=state.sync_metadata.sync_status,
+            sync_started_at=state.sync_metadata.sync_started_at.isoformat() if state.sync_metadata.sync_started_at else None,
+            last_completed_at=state.sync_metadata.last_synced_at.isoformat() if state.sync_metadata.last_synced_at else None,
+            last_successful_at=state.sync_metadata.last_successful_sync_at.isoformat() if state.sync_metadata.last_successful_sync_at else None,
+            error_reason=state.sync_metadata.error_message if state.sync_metadata.sync_status == 'failed' else None,
+            request_id=state.sync_metadata.last_sync_request_id,
+        )
+
         # Convert dataclasses to response models
         sync_metadata = CoreSyncMetadataResponse(
             organization_id=state.sync_metadata.organization_id,
@@ -297,6 +356,7 @@ async def get_core_state(
             transactions_synced=state.sync_metadata.transactions_synced,
             entities_derived=state.sync_metadata.entities_derived,
             sync_status=state.sync_metadata.sync_status,
+            sync_started_at=state.sync_metadata.sync_started_at.isoformat() if state.sync_metadata.sync_started_at else None,
             error_message=state.sync_metadata.error_message,
         )
 
@@ -315,14 +375,23 @@ async def get_core_state(
             active_account_count=state.metrics.active_account_count,
         )
 
+        # Build evidence (≤3 recent transactions for lightweight proof of sync)
+        # BOUNDED: Only first 3 items for performance
+        evidence = RecentEvidenceResponse(
+            recent_transactions=state.recent_transactions[:3] if state.recent_transactions else [],
+            recent_entity_changes=[],  # Placeholder for future entity change tracking
+        )
+
         return CoreStateResponse(
             success=True,
             request_id=request_id,
             organization_id=ctx["org_id"],
             available=is_available,
+            sync=sync_lifecycle,
             staleness=staleness,
             sync_metadata=sync_metadata,
             metrics=metrics,
+            evidence=evidence,
             plaid_items=state.plaid_items,
             recent_transactions=state.recent_transactions,
             customer_summary=state.customer_summary,

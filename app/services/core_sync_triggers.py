@@ -353,7 +353,8 @@ def maybe_schedule_auto_retry(
     if not is_stale:
         return False
 
-    if sync_status == 'syncing':
+    # Check if sync is in progress (check both 'running' and legacy 'syncing' status)
+    if sync_status in ('running', 'syncing'):
         logger.debug(f"Auto-retry skipped: sync already in progress for org={organization_id}")
         return False
 

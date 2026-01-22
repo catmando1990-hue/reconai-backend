@@ -48,14 +48,27 @@ STALE_THRESHOLD_HOURS = 24
 
 @dataclass
 class CoreSyncMetadata:
-    """Tracks the last sync state for an organization."""
+    """
+    Tracks the last sync state for an organization.
+
+    LIFECYCLE STATES:
+    - 'never': No sync has ever been attempted
+    - 'running': Sync is currently in progress (sync_started_at is set)
+    - 'success': Last sync completed successfully (is_full_success=True)
+    - 'failed': Last sync failed or was partial
+
+    CRITICAL:
+    - sync_started_at: Set immediately when sync begins, cleared on completion
+    - last_successful_sync_at: ONLY set on FULL successful sync (never partial)
+    """
     organization_id: str
+    sync_started_at: Optional[datetime]  # Set when sync begins, null when not running
     last_synced_at: Optional[datetime]
     last_successful_sync_at: Optional[datetime]  # ONLY set on FULL success
     last_sync_request_id: Optional[str]
     transactions_synced: Optional[int]
     entities_derived: Optional[int]
-    sync_status: str  # 'never', 'success', 'failed', 'syncing'
+    sync_status: str  # 'never' | 'running' | 'success' | 'failed'
     error_message: Optional[str]
     last_retry_at: Optional[datetime]
     retry_count: int
@@ -433,8 +446,9 @@ class CoreSyncService:
         request_id = f"core_{uuid4().hex[:16]}"
 
         try:
-            # Mark sync as started
-            self._update_sync_status(organization_id, 'syncing', request_id)
+            # CRITICAL: Mark sync as running IMMEDIATELY
+            # This sets sync_status='running' and sync_started_at=now()
+            self._mark_sync_running(organization_id, request_id)
 
             # Step 1: Get all Plaid items for org
             items_response = self.plaid_service.list_items(organization_id)
@@ -659,6 +673,38 @@ class CoreSyncService:
 
         return self.deriver.derive_customer_suggestions(tx_list, existing_customers)
 
+    def _mark_sync_running(
+        self,
+        organization_id: str,
+        request_id: str,
+    ) -> None:
+        """
+        Mark sync as running IMMEDIATELY when sync begins.
+
+        Sets:
+        - sync_status = 'running'
+        - sync_started_at = now()
+        - last_sync_request_id = request_id
+
+        This MUST be called at the very start of sync_organization().
+        """
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO core_sync_metadata (
+                    id, organization_id, sync_status, sync_started_at, last_sync_request_id
+                ) VALUES (?, ?, 'running', datetime('now'), ?)
+                ON CONFLICT(organization_id) DO UPDATE SET
+                    sync_status = 'running',
+                    sync_started_at = datetime('now'),
+                    last_sync_request_id = excluded.last_sync_request_id,
+                    updated_at = datetime('now')
+            """, (
+                str(uuid4()),
+                organization_id,
+                request_id,
+            ))
+            conn.commit()
+
     def _update_sync_status(
         self,
         organization_id: str,
@@ -670,21 +716,24 @@ class CoreSyncService:
         is_full_success: bool = False,
     ) -> None:
         """
-        Update CORE sync metadata.
+        Update CORE sync metadata on completion (success or failure).
 
-        CRITICAL: last_successful_sync_at is ONLY set when is_full_success=True.
-        Partial successes or failures do NOT update last_successful_sync_at.
+        CRITICAL:
+        - last_successful_sync_at is ONLY set when is_full_success=True
+        - sync_started_at is cleared (set to NULL) on completion
+        - Partial successes or failures do NOT update last_successful_sync_at
         """
         with self._get_conn() as conn:
             # Build the SQL based on whether this is a full success
             if is_full_success:
                 # Full success - update last_successful_sync_at, clear error, reset retry count
+                # Clear sync_started_at since sync is complete
                 conn.execute("""
                     INSERT INTO core_sync_metadata (
                         id, organization_id, last_synced_at, last_successful_sync_at,
                         last_sync_request_id, transactions_synced, entities_derived,
-                        sync_status, error_message, retry_count
-                    ) VALUES (?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?, NULL, 0)
+                        sync_status, error_message, retry_count, sync_started_at
+                    ) VALUES (?, ?, datetime('now'), datetime('now'), ?, ?, ?, ?, NULL, 0, NULL)
                     ON CONFLICT(organization_id) DO UPDATE SET
                         last_synced_at = datetime('now'),
                         last_successful_sync_at = datetime('now'),
@@ -694,6 +743,7 @@ class CoreSyncService:
                         sync_status = excluded.sync_status,
                         error_message = NULL,
                         retry_count = 0,
+                        sync_started_at = NULL,
                         updated_at = datetime('now')
                 """, (
                     str(uuid4()),
@@ -705,11 +755,12 @@ class CoreSyncService:
                 ))
             else:
                 # Not a full success - do NOT update last_successful_sync_at
+                # Clear sync_started_at since sync is complete (even if failed)
                 conn.execute("""
                     INSERT INTO core_sync_metadata (
                         id, organization_id, last_synced_at, last_sync_request_id,
-                        transactions_synced, entities_derived, sync_status, error_message
-                    ) VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?)
+                        transactions_synced, entities_derived, sync_status, error_message, sync_started_at
+                    ) VALUES (?, ?, datetime('now'), ?, ?, ?, ?, ?, NULL)
                     ON CONFLICT(organization_id) DO UPDATE SET
                         last_synced_at = datetime('now'),
                         last_sync_request_id = excluded.last_sync_request_id,
@@ -717,6 +768,7 @@ class CoreSyncService:
                         entities_derived = COALESCE(excluded.entities_derived, entities_derived),
                         sync_status = excluded.sync_status,
                         error_message = excluded.error_message,
+                        sync_started_at = NULL,
                         updated_at = datetime('now')
                 """, (
                     str(uuid4()),
@@ -750,6 +802,7 @@ class CoreSyncService:
             if sync_row:
                 sync_metadata = CoreSyncMetadata(
                     organization_id=organization_id,
+                    sync_started_at=datetime.fromisoformat(sync_row['sync_started_at']) if sync_row['sync_started_at'] else None,
                     last_synced_at=datetime.fromisoformat(sync_row['last_synced_at']) if sync_row['last_synced_at'] else None,
                     last_successful_sync_at=datetime.fromisoformat(sync_row['last_successful_sync_at']) if sync_row['last_successful_sync_at'] else None,
                     last_sync_request_id=sync_row['last_sync_request_id'],
@@ -763,6 +816,7 @@ class CoreSyncService:
             else:
                 sync_metadata = CoreSyncMetadata(
                     organization_id=organization_id,
+                    sync_started_at=None,
                     last_synced_at=None,
                     last_successful_sync_at=None,
                     last_sync_request_id=None,

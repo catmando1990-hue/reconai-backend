@@ -728,18 +728,20 @@ def init_db() -> None:
         # =================================================================
 
         # CORE sync metadata - tracks sync state per organization
-        # sync_status: 'never' | 'success' | 'failed' | 'syncing'
+        # sync_status: 'never' | 'running' | 'success' | 'failed'
+        # sync_started_at: Set immediately when sync begins
         # last_successful_sync_at: ONLY set on FULL successful sync (never partial)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS core_sync_metadata (
                 id TEXT PRIMARY KEY,
                 organization_id TEXT NOT NULL UNIQUE,
+                sync_status TEXT DEFAULT 'never',
+                sync_started_at TEXT,
                 last_synced_at TEXT,
                 last_successful_sync_at TEXT,
                 last_sync_request_id TEXT,
                 transactions_synced INTEGER,
                 entities_derived INTEGER,
-                sync_status TEXT DEFAULT 'never',
                 error_message TEXT,
                 last_retry_at TEXT,
                 retry_count INTEGER DEFAULT 0,
