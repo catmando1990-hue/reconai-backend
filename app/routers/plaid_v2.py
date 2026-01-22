@@ -35,7 +35,7 @@ import json
 import logging
 import os
 from typing import Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -50,7 +50,6 @@ from app.models.plaid import (
     PlaidWebhookPayload,
     TransactionsSyncRequest,
     TransactionsSyncResponse,
-    WebhookResponse,
 )
 from app.services.plaid_service import PlaidService, get_plaid_service
 from app.services.audit_service import record_audit, AuditServiceError
@@ -63,7 +62,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-def _validate_request_id(request_id: Optional[str]) -> str:
+def validate_request_id(request_id: Optional[str]) -> str:
     """
     Validate X-Request-ID header.
 
@@ -104,32 +103,38 @@ def _validate_request_id(request_id: Optional[str]) -> str:
     return request_id
 
 
-def _build_provenance_response(
-    data: dict,
+def provenance_response(
+    payload: dict,
     request_id: str,
     status_code: int = 200,
 ) -> JSONResponse:
     """
-    Build a response with provenance headers and body.
+    Canonical provenance response builder.
 
-    Ensures request_id is in both X-Request-ID header and body.
+    CHECKLIST (FAIL IF ANY MISSING):
+    - Header `X-Request-ID` set ✓
+    - Body includes `request_id` ✓
 
     Args:
-        data: Response data dict
+        payload: Response payload dict
         request_id: The validated request_id
-        status_code: HTTP status code
+        status_code: HTTP status code (default: 200)
 
     Returns:
-        JSONResponse with provenance header and body field
+        JSONResponse with:
+        - X-Request-ID header echoed
+        - request_id in body
     """
-    # Ensure request_id is in the body
-    data["request_id"] = request_id
+    # CHECKLIST ITEM 1: Ensure request_id is in the body
+    payload["request_id"] = request_id
 
+    # CHECKLIST ITEM 2: Return with X-Request-ID header
     return JSONResponse(
         status_code=status_code,
         headers={"X-Request-ID": request_id},
-        content=data,
+        content=payload,
     )
+
 
 router = APIRouter(prefix="/api/plaid", tags=["plaid"])
 
@@ -174,7 +179,7 @@ async def create_link_token(
         JSONResponse with link_token, expiration, and X-Request-ID header
     """
     # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
-    request_id = _validate_request_id(x_request_id)
+    request_id = validate_request_id(x_request_id)
 
     # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
     try:
@@ -219,8 +224,8 @@ async def create_link_token(
             f"error={response.error.error_code if response.error else 'unknown'}"
         )
         # Return error with provenance
-        return _build_provenance_response(
-            data={
+        return provenance_response(
+            payload={
                 "success": False,
                 "error": response.error.model_dump() if response.error else None,
             },
@@ -229,8 +234,8 @@ async def create_link_token(
         )
 
     # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
-    return _build_provenance_response(
-        data={
+    return provenance_response(
+        payload={
             "success": True,
             "link_token": response.link_token,
             "expiration": response.expiration,
@@ -273,7 +278,7 @@ async def exchange_public_token(
         JSONResponse with item_id, is_duplicate flag, and X-Request-ID header
     """
     # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
-    request_id = _validate_request_id(x_request_id)
+    request_id = validate_request_id(x_request_id)
 
     if not payload.public_token:
         raise HTTPException(
@@ -331,8 +336,8 @@ async def exchange_public_token(
             f"error={response.error.error_code if response.error else 'unknown'}"
         )
         # Return error with provenance
-        return _build_provenance_response(
-            data={
+        return provenance_response(
+            payload={
                 "success": False,
                 "error": response.error.model_dump() if response.error else None,
             },
@@ -356,8 +361,8 @@ async def exchange_public_token(
         )
 
     # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
-    return _build_provenance_response(
-        data={
+    return provenance_response(
+        payload={
             "success": True,
             "item_id": response.item_id,
             "is_duplicate": response.is_duplicate,
@@ -405,7 +410,7 @@ async def sync_transactions(
         JSONResponse with transactions, pagination info, and X-Request-ID header
     """
     # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
-    request_id = _validate_request_id(x_request_id)
+    request_id = validate_request_id(x_request_id)
 
     if not payload.item_id:
         raise HTTPException(
@@ -473,8 +478,8 @@ async def sync_transactions(
             f"error={response.error.error_code if response.error else 'unknown'}"
         )
         # Return error with provenance
-        return _build_provenance_response(
-            data={
+        return provenance_response(
+            payload={
                 "success": False,
                 "error": response.error.model_dump() if response.error else None,
             },
@@ -483,8 +488,8 @@ async def sync_transactions(
         )
 
     # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
-    return _build_provenance_response(
-        data={
+    return provenance_response(
+        payload={
             "success": True,
             "added": [tx.model_dump() for tx in response.added],
             "modified": [tx.model_dump() for tx in response.modified],
@@ -502,17 +507,18 @@ async def sync_transactions(
 # =============================================================================
 
 
-@router.post("/webhook", response_model=WebhookResponse)
+@router.post("/webhook")
 async def handle_webhook(
     request: Request,
     plaid_verification: Optional[str] = Header(None, alias="Plaid-Verification"),
     plaid_service: PlaidService = Depends(get_plaid_service),
-) -> WebhookResponse:
+) -> JSONResponse:
     """
     Handle Plaid webhook events.
 
     **Auth Required:** No (but signature verified)
     **Webhook Verification:** Plaid-Verification header (HMAC-SHA256)
+    **Provenance:** Internal request_id generated (webhooks don't have X-Request-ID)
 
     This endpoint processes Plaid webhooks for:
     - ITEM events (LOGIN_REQUIRED, ERROR, LOGIN_REPAIRED, etc.)
@@ -532,8 +538,11 @@ async def handle_webhook(
     - LOGIN_REPAIRED: Sets item status to 'active'
 
     Returns:
-        WebhookResponse with action taken
+        JSONResponse with provenance (X-Request-ID header and body field)
     """
+    # Generate internal request_id for webhooks (they don't have X-Request-ID)
+    request_id = str(uuid4())
+
     # Read raw body for signature verification
     body = await request.body()
 
@@ -548,6 +557,7 @@ async def handle_webhook(
                     "error": "WEBHOOK_ERROR",
                     "error_code": "MISSING_SIGNATURE",
                     "message": "Plaid-Verification header required in production",
+                    "request_id": request_id,
                 },
             )
         else:
@@ -563,12 +573,13 @@ async def handle_webhook(
                     "error": "WEBHOOK_ERROR",
                     "error_code": "INVALID_SIGNATURE",
                     "message": "Webhook signature verification failed",
+                    "request_id": request_id,
                 },
             )
 
     # Parse payload
     try:
-        payload = json.loads(body)
+        webhook_payload = json.loads(body)
     except json.JSONDecodeError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -576,32 +587,44 @@ async def handle_webhook(
                 "error": "WEBHOOK_ERROR",
                 "error_code": "INVALID_PAYLOAD",
                 "message": f"Invalid JSON payload: {e}",
+                "request_id": request_id,
             },
         )
 
-    webhook_type = payload.get("webhook_type", "")
-    webhook_code = payload.get("webhook_code", "")
-    item_id = payload.get("item_id", "")
+    webhook_type = webhook_payload.get("webhook_type", "")
+    webhook_code = webhook_payload.get("webhook_code", "")
+    item_id = webhook_payload.get("item_id", "")
 
     if not item_id:
         logger.warning(f"Webhook missing item_id: type={webhook_type} code={webhook_code}")
-        return WebhookResponse(
-            success=True,
-            request_id="webhook_no_item",
-            webhook_type=webhook_type,
-            webhook_code=webhook_code,
-            action_taken="ignored_missing_item_id",
+        return provenance_response(
+            payload={
+                "success": True,
+                "webhook_type": webhook_type,
+                "webhook_code": webhook_code,
+                "action_taken": "ignored_missing_item_id",
+            },
+            request_id=request_id,
         )
 
     response = plaid_service.process_webhook(
         webhook_type=webhook_type,
         webhook_code=webhook_code,
         item_id=item_id,
-        payload=payload,
+        payload=webhook_payload,
         ip_address=_get_client_ip(request),
     )
 
-    return response
+    # Return via canonical provenance_response
+    return provenance_response(
+        payload={
+            "success": response.success,
+            "webhook_type": response.webhook_type,
+            "webhook_code": response.webhook_code,
+            "action_taken": response.action_taken,
+        },
+        request_id=request_id,
+    )
 
 
 # =============================================================================
@@ -631,7 +654,7 @@ async def list_items(
         JSONResponse with list of PlaidItemInfo and X-Request-ID header
     """
     # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
-    request_id = _validate_request_id(x_request_id)
+    request_id = validate_request_id(x_request_id)
 
     # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
     try:
@@ -665,8 +688,8 @@ async def list_items(
     )
 
     # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
-    return _build_provenance_response(
-        data={
+    return provenance_response(
+        payload={
             "success": response.success,
             "items": [item.model_dump() for item in response.items] if response.items else [],
         },
@@ -693,7 +716,7 @@ async def get_item(
         JSONResponse with PlaidItemInfo and X-Request-ID header, or 404 if not found
     """
     # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
-    request_id = _validate_request_id(x_request_id)
+    request_id = validate_request_id(x_request_id)
 
     # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
     try:
@@ -735,8 +758,8 @@ async def get_item(
         )
 
     # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
-    return _build_provenance_response(
-        data={
+    return provenance_response(
+        payload={
             "success": True,
             "item": item,
         },
