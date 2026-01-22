@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 
 from app.auth_context import get_current_user_id
+from app.settings.contract import SETTINGS_CONTRACT_VERSION, wrap_settings_response
 
 router = APIRouter(prefix="/api/user", tags=["users"])
 
@@ -246,12 +247,17 @@ async def update_user_profile(
         )
 
 
-@router.get("/notifications", response_model=NotificationSettings)
+@router.get("/notifications")
 async def get_notification_settings(
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
     Get current user's notification preferences
+
+    CONTRACT VERSION: 1
+    - settings_version: ALWAYS present
+    - lifecycle: ALWAYS present
+    - metadata: ALWAYS present
 
     Returns notification settings for:
     - Email notifications
@@ -274,7 +280,8 @@ async def get_notification_settings(
                 compliance_alerts,
                 invoice_reminders,
                 weekly_summary,
-                monthly_report
+                monthly_report,
+                updated_at
             FROM users
             WHERE user_id = ?
         """, (current_user_id,))
@@ -283,16 +290,33 @@ async def get_notification_settings(
         conn.close()
 
         if not row:
-            # Return default settings if user not found
-            return NotificationSettings()
+            # Return default settings with no_data lifecycle
+            return wrap_settings_response(
+                ok=True,
+                sources=["users"],
+                scope="user",
+                modified_by=None,
+                lifecycle_status="no_data",
+                lifecycle_reason="USER_NOT_FOUND",
+                notifications=NotificationSettings().model_dump(),
+            )
 
-        return NotificationSettings(
+        notifications = NotificationSettings(
             email_notifications=bool(row[0]) if row[0] is not None else True,
             transaction_alerts=bool(row[1]) if row[1] is not None else True,
             compliance_alerts=bool(row[2]) if row[2] is not None else True,
             invoice_reminders=bool(row[3]) if row[3] is not None else True,
             weekly_summary=bool(row[4]) if row[4] is not None else True,
             monthly_report=bool(row[5]) if row[5] is not None else True
+        )
+
+        return wrap_settings_response(
+            ok=True,
+            sources=["users"],
+            scope="user",
+            last_modified_at=row[6] if row[6] else None,
+            modified_by=current_user_id,
+            notifications=notifications.model_dump(),
         )
 
     except Exception as e:
@@ -302,13 +326,18 @@ async def get_notification_settings(
         )
 
 
-@router.put("/notifications", response_model=NotificationSettings)
+@router.put("/notifications")
 async def update_notification_settings(
     settings: UpdateNotificationsRequest,
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
     Update current user's notification preferences
+
+    CONTRACT VERSION: 1
+    - settings_version: ALWAYS present
+    - lifecycle: ALWAYS present
+    - metadata: ALWAYS present
 
     Updates notification settings. Only provided fields will be updated.
     """
@@ -341,9 +370,10 @@ async def update_notification_settings(
             updates.append("monthly_report = ?")
             params.append(int(settings.monthly_report))
 
+        now = datetime.now().isoformat()
         if updates:
             updates.append("updated_at = ?")
-            params.append(datetime.now().isoformat())
+            params.append(now)
             params.append(current_user_id)
 
             query = f"UPDATE users SET {', '.join(updates)} WHERE user_id = ?"
@@ -362,13 +392,22 @@ async def update_notification_settings(
         row = cursor.fetchone()
         conn.close()
 
-        return NotificationSettings(
+        notifications = NotificationSettings(
             email_notifications=bool(row[0]) if row[0] is not None else True,
             transaction_alerts=bool(row[1]) if row[1] is not None else True,
             compliance_alerts=bool(row[2]) if row[2] is not None else True,
             invoice_reminders=bool(row[3]) if row[3] is not None else True,
             weekly_summary=bool(row[4]) if row[4] is not None else True,
             monthly_report=bool(row[5]) if row[5] is not None else True
+        )
+
+        return wrap_settings_response(
+            ok=True,
+            sources=["users"],
+            scope="user",
+            last_modified_at=now,
+            modified_by=current_user_id,
+            notifications=notifications.model_dump(),
         )
 
     except Exception as e:

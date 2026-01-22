@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
+from app.settings.contract import SETTINGS_CONTRACT_VERSION, wrap_settings_response
 from .billing_rbac import get_billing_actor, require_billing_permission
 
 router = APIRouter(tags=["billing-controls"])
@@ -166,6 +167,11 @@ async def get_financial_controls(
     """
     Get current financial control settings.
 
+    CONTRACT VERSION: 1
+    - settings_version: ALWAYS present
+    - lifecycle: ALWAYS present
+    - metadata: ALWAYS present
+
     Read-only endpoint - no mutations.
     Returns soft limits, thresholds, and caps.
     """
@@ -179,11 +185,15 @@ async def get_financial_controls(
 
     controls = _get_financial_controls(org_id)
 
-    return {
-        "request_id": request_id,
-        "org_id": org_id,
-        "controls": controls,
-    }
+    return wrap_settings_response(
+        ok=True,
+        sources=["organizations", "financial_controls"],
+        scope="organization",
+        modified_by=None,
+        request_id=request_id,
+        org_id=org_id,
+        controls=controls,
+    )
 
 
 @router.post("/api/billing/controls")
@@ -194,6 +204,11 @@ async def update_financial_controls(
     """
     Update financial control settings.
 
+    CONTRACT VERSION: 1
+    - settings_version: ALWAYS present
+    - lifecycle: ALWAYS present
+    - metadata: ALWAYS present
+
     Manual invocation only - no auto-enforcement.
     RBAC: manage_roles permission required (owner, billing_admin).
     Audit-logged for compliance.
@@ -201,6 +216,7 @@ async def update_financial_controls(
     request_id = str(uuid4())
     org_id = ctx["org_id"]
     user_id = ctx["user_id"]
+    now = datetime.utcnow().isoformat()
 
     # RBAC check: manage_roles required for writes
     actor = get_billing_actor(user_id, org_id)
@@ -247,12 +263,17 @@ async def update_financial_controls(
     except Exception:
         pass  # Audit logging should not fail the request
 
-    return {
-        "request_id": request_id,
-        "org_id": org_id,
-        "status": "updated",
-        "controls": current,
-    }
+    return wrap_settings_response(
+        ok=True,
+        sources=["organizations", "financial_controls"],
+        scope="organization",
+        last_modified_at=now,
+        modified_by=user_id,
+        request_id=request_id,
+        org_id=org_id,
+        status="updated",
+        controls=current,
+    )
 
 
 @router.get("/api/billing/controls/alerts")
@@ -261,6 +282,11 @@ async def get_spending_alerts(
 ):
     """
     Get audit-only alerts for spending thresholds.
+
+    CONTRACT VERSION: 1
+    - settings_version: ALWAYS present
+    - lifecycle: ALWAYS present
+    - metadata: ALWAYS present
 
     Read-only endpoint - NO auto-enforcement.
     Returns advisory alerts only - user must take action manually.
@@ -275,10 +301,14 @@ async def get_spending_alerts(
 
     alerts = _get_spending_alerts(org_id)
 
-    return {
-        "request_id": request_id,
-        "org_id": org_id,
-        "alerts": alerts,
-        "advisory_only": True,  # Explicit: no auto-actions
-        "message": "Alerts are advisory only. No automatic enforcement.",
-    }
+    return wrap_settings_response(
+        ok=True,
+        sources=["organizations", "financial_controls", "alerts"],
+        scope="organization",
+        modified_by=None,
+        request_id=request_id,
+        org_id=org_id,
+        alerts=alerts,
+        advisory_only=True,  # Explicit: no auto-actions
+        message="Alerts are advisory only. No automatic enforcement.",
+    )
