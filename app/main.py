@@ -111,7 +111,18 @@ from app.routers.compliance_automation_api import router as compliance_automatio
 from app.routers.security_trust_api import router as security_trust_router
 from app.routers.ai_financial_intelligence_api import router as ai_financial_intelligence_router
 from app.routers.gtm_pricing_api import router as gtm_pricing_router
-from app.routers.production_readiness_api import router as production_readiness_router
+# STEP 13 — Production Readiness Import (fail-closed with diagnostics)
+try:
+    from app.routers.production_readiness_api import router as production_readiness_router
+except Exception:
+    print("PRODUCTION_READINESS_IMPORT_FAILED", file=sys.stderr)
+    traceback.print_exc()
+    logger.critical(
+        "PRODUCTION_READINESS_IMPORT_FAILED",
+        exc_info=True,
+        extra={"module": "app.routers.production_readiness_api"},
+    )
+    raise
 from app.routers.ml_governance_api import router as ml_governance_router
 from app.routers.onboarding_api import router as onboarding_api_router
 from app.routers.capabilities_api import router as capabilities_router
