@@ -53,9 +53,51 @@ router = APIRouter(prefix="/api/core", tags=["core"])
 # =============================================================================
 
 
+# =============================================================================
+# SYNC LIFECYCLE ENUM (Strict validation, no fallbacks)
+# =============================================================================
+
+# Contract version - increment on breaking changes
+SYNC_CONTRACT_VERSION = 1
+
+# Valid sync lifecycle states - EXHAUSTIVE, no additions without RFC
+VALID_SYNC_STATUSES = frozenset({"never", "running", "success", "failed"})
+
+
+class SyncStatusValidationError(ValueError):
+    """Raised when an invalid sync status is encountered."""
+    pass
+
+
+def validate_sync_status(status: str) -> str:
+    """
+    Validate sync status is in the allowed set.
+
+    FAIL-CLOSED: Invalid statuses are rejected, not coerced.
+
+    Args:
+        status: The status string to validate
+
+    Returns:
+        The validated status string
+
+    Raises:
+        SyncStatusValidationError: If status is not in VALID_SYNC_STATUSES
+    """
+    if status not in VALID_SYNC_STATUSES:
+        raise SyncStatusValidationError(
+            f"Invalid sync status '{status}'. Must be one of: {sorted(VALID_SYNC_STATUSES)}"
+        )
+    return status
+
+
 class SyncLifecycleResponse(BaseModel):
     """
     Explicit sync lifecycle for frontend state machines.
+
+    CONTRACT VERSION: 1
+    - sync_version: ALWAYS present, integer
+    - status: MUST be one of { never, running, success, failed }
 
     STATUS VALUES:
     - 'never': No sync has ever been attempted
@@ -67,13 +109,45 @@ class SyncLifecycleResponse(BaseModel):
     - If status='running', show spinner
     - If status='failed', show error with error_reason
     - Use sync_started_at to calculate elapsed time for running syncs
+
+    FAIL-CLOSED: Invalid status values are REJECTED, not coerced.
     """
-    status: str  # 'never' | 'running' | 'success' | 'failed'
+    sync_version: int = SYNC_CONTRACT_VERSION  # ALWAYS present, contract version
+    status: str  # MUST be one of: 'never' | 'running' | 'success' | 'failed'
     sync_started_at: Optional[str] = None  # ISO datetime, only set when status='running'
     last_completed_at: Optional[str] = None  # ISO datetime of last completion (success or fail)
     last_successful_at: Optional[str] = None  # ISO datetime of last FULL success
     error_reason: Optional[str] = None  # Only set when status='failed'
     request_id: Optional[str] = None  # Current or last request ID
+
+    @classmethod
+    def create_validated(
+        cls,
+        status: str,
+        sync_started_at: Optional[str] = None,
+        last_completed_at: Optional[str] = None,
+        last_successful_at: Optional[str] = None,
+        error_reason: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> "SyncLifecycleResponse":
+        """
+        Create a SyncLifecycleResponse with strict status validation.
+
+        FAIL-CLOSED: Rejects invalid status values.
+
+        Raises:
+            SyncStatusValidationError: If status is invalid
+        """
+        validated_status = validate_sync_status(status)
+        return cls(
+            sync_version=SYNC_CONTRACT_VERSION,
+            status=validated_status,
+            sync_started_at=sync_started_at,
+            last_completed_at=last_completed_at,
+            last_successful_at=last_successful_at,
+            error_reason=error_reason,
+            request_id=request_id,
+        )
 
 
 class CoreSyncMetadataResponse(BaseModel):
@@ -338,14 +412,28 @@ async def get_core_state(
         )
 
         # Build sync lifecycle object (explicit for frontend state machines)
-        sync_lifecycle = SyncLifecycleResponse(
-            status=state.sync_metadata.sync_status,
-            sync_started_at=state.sync_metadata.sync_started_at.isoformat() if state.sync_metadata.sync_started_at else None,
-            last_completed_at=state.sync_metadata.last_synced_at.isoformat() if state.sync_metadata.last_synced_at else None,
-            last_successful_at=state.sync_metadata.last_successful_sync_at.isoformat() if state.sync_metadata.last_successful_sync_at else None,
-            error_reason=state.sync_metadata.error_message if state.sync_metadata.sync_status == 'failed' else None,
-            request_id=state.sync_metadata.last_sync_request_id,
-        )
+        # FAIL-CLOSED: Uses create_validated to reject invalid status values
+        try:
+            sync_lifecycle = SyncLifecycleResponse.create_validated(
+                status=state.sync_metadata.sync_status,
+                sync_started_at=state.sync_metadata.sync_started_at.isoformat() if state.sync_metadata.sync_started_at else None,
+                last_completed_at=state.sync_metadata.last_synced_at.isoformat() if state.sync_metadata.last_synced_at else None,
+                last_successful_at=state.sync_metadata.last_successful_sync_at.isoformat() if state.sync_metadata.last_successful_sync_at else None,
+                error_reason=state.sync_metadata.error_message if state.sync_metadata.sync_status == 'failed' else None,
+                request_id=state.sync_metadata.last_sync_request_id,
+            )
+        except SyncStatusValidationError as e:
+            # FAIL-CLOSED: Invalid status is a server error, not a client error
+            logger.error(f"Invalid sync status in database: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "INTERNAL_ERROR",
+                    "error_code": "INVALID_SYNC_STATUS",
+                    "message": str(e),
+                    "request_id": request_id,
+                },
+            )
 
         # Convert dataclasses to response models
         sync_metadata = CoreSyncMetadataResponse(
