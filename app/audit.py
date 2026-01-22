@@ -1,45 +1,37 @@
-"""ReconAI audit compatibility module.
+# app/audit.py
+"""
+Audit Module - Canonical Implementation (FAIL-CLOSED)
 
-Why this file exists:
-- Some routers import `record_audit_event` from `app.audit`.
-- If the canonical audit implementation lives elsewhere (or is refactored),
-  this module prevents import-time crashes on deploy.
+This module provides the async interface for audit recording.
+All operations delegate to the canonical audit_store.
 
-Preferred shape:
-- Re-export a real implementation if present.
-- Otherwise, provide a best-effort fallback that never blocks requests.
+CONTRACT:
+- Audit failures ABORT the request (fail-closed)
+- request_id is REQUIRED for all audit events
+- All data is persisted to SQLite with hash-chaining
+- No silent failures - exceptions propagate
+
+MIGRATION NOTE:
+This replaces the previous "best-effort" logger-only implementation.
+Audit is now MANDATORY for compliance (DCAA).
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-import json
-import logging
 from datetime import datetime, timezone
 
-logger = logging.getLogger("reconai.audit")
+from app.services.audit_store import (
+    AuditEventInput,
+    AuditEventRecord,
+    AuditInsertError,
+    insert_audit_event,
+)
 
 
-def _utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _safe_json(obj: Any) -> str:
-    try:
-        return json.dumps(obj, default=str, ensure_ascii=False)
-    except Exception:
-        return json.dumps({"unserializable": True, "type": str(type(obj))})
-
-
-# ---- Preferred: re-export a canonical implementation if you have one ----
-# If you already have a real audit system, uncomment and update the import below:
-#
-# from app.governance.audit import record_audit_event  # noqa: F401
-#
-# or:
-# from app.utils.audit import record_audit_event  # noqa: F401
-#
-# Keep the fallback below only if you truly have no other implementation.
+class AuditError(Exception):
+    """Raised when audit operation fails. Request MUST abort."""
+    pass
 
 
 async def record_audit_event(
@@ -51,26 +43,100 @@ async def record_audit_event(
     status: str = "ok",
     metadata: Optional[Dict[str, Any]] = None,
     request_id: Optional[str] = None,
-) -> None:
-    """Best-effort audit event recorder.
-
-    - Never raises (fail-open) to avoid taking down the API.
-    - Emits a structured log line that Render will retain.
-    - If you later wire a DB/immutable audit seal, replace this with the canonical implementation.
+) -> AuditEventRecord:
     """
+    Record an audit event to the canonical audit_store.
+
+    FAIL-CLOSED: If this fails, an exception is raised and the request MUST abort.
+
+    Args:
+        actor: Actor information dict (must contain user_id)
+        action: Action being performed (e.g., "govcon.export")
+        resource_type: Type of resource being accessed
+        resource_id: ID of the resource
+        status: Status of the action (e.g., "ok", "error")
+        metadata: Additional metadata to record
+        request_id: Request ID for traceability (REQUIRED)
+
+    Returns:
+        The persisted AuditEventRecord
+
+    Raises:
+        AuditError: If audit insertion fails (fail-closed)
+        ValueError: If required fields are missing
+    """
+    # Extract actor_id from actor dict
+    actor_id = "unknown"
+    if actor:
+        actor_id = actor.get("user_id") or actor.get("id") or "unknown"
+
+    # Build comprehensive payload
+    payload: Dict[str, Any] = {
+        "request_id": request_id,
+        "status": status,
+        "actor_details": actor,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+    # Add metadata if provided
+    if metadata:
+        payload["metadata"] = metadata
+
+    # Create audit event input
+    audit_input = AuditEventInput(
+        actor_id=actor_id,
+        event_type=action,
+        entity_type=resource_type,
+        entity_id=resource_id,
+        payload=payload,
+    )
+
     try:
-        payload = {
-            "ts": _utc_iso(),
-            "request_id": request_id,
-            "actor": actor,
-            "action": action,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "status": status,
-            "metadata": metadata or {},
-        }
-        logger.info("AUDIT %s", _safe_json(payload))
-    except Exception:
-        # Absolutely never block a request because auditing failed.
-        logger.exception("AUDIT_WRITE_FAILED")
-        return
+        return insert_audit_event(audit_input)
+    except AuditInsertError as e:
+        # FAIL-CLOSED: Re-raise as AuditError
+        raise AuditError(f"Audit recording failed (fail-closed): {e}") from e
+
+
+# Synchronous wrapper for compatibility
+def record_audit_event_sync(
+    *,
+    actor: Optional[Dict[str, Any]] = None,
+    action: str,
+    resource_type: str,
+    resource_id: Optional[str] = None,
+    status: str = "ok",
+    metadata: Optional[Dict[str, Any]] = None,
+    request_id: Optional[str] = None,
+) -> AuditEventRecord:
+    """
+    Synchronous version of record_audit_event.
+
+    FAIL-CLOSED: If this fails, an exception is raised and the request MUST abort.
+    """
+    actor_id = "unknown"
+    if actor:
+        actor_id = actor.get("user_id") or actor.get("id") or "unknown"
+
+    payload: Dict[str, Any] = {
+        "request_id": request_id,
+        "status": status,
+        "actor_details": actor,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+    if metadata:
+        payload["metadata"] = metadata
+
+    audit_input = AuditEventInput(
+        actor_id=actor_id,
+        event_type=action,
+        entity_type=resource_type,
+        entity_id=resource_id,
+        payload=payload,
+    )
+
+    try:
+        return insert_audit_event(audit_input)
+    except AuditInsertError as e:
+        raise AuditError(f"Audit recording failed (fail-closed): {e}") from e

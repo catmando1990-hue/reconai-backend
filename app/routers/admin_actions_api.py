@@ -6,10 +6,11 @@ These endpoints provide real fix actions that can be triggered by
 the admin dashboard's AI diagnostic agents.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional, Literal
 from datetime import datetime
+from uuid import uuid4
 import asyncio
 import os
 import httpx
@@ -20,7 +21,7 @@ from datetime import timedelta
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
 from app.services.organization_service import OrganizationService
-from app.services.audit_service import record_audit
+from app.services.audit_service import record_audit, AuditServiceError
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Actions"])
 
@@ -182,7 +183,8 @@ def cleanup_expired_fixes():
 
 @router.post("/org/tier")
 async def set_active_org_tier(
-    request: SetOrgTierRequest,
+    tier_request: SetOrgTierRequest,
+    http_request: Request,
     ctx: AuthContext = Depends(get_current_context),
 ):
     """
@@ -192,10 +194,14 @@ async def set_active_org_tier(
     This is intended for controlled testing / break-glass operations.
 
     Safety: caller must supply confirm=SET_TIER:<TIER> (uppercase).
+    AUDIT: FAIL-CLOSED - If audit fails, tier update is aborted.
     """
     assert_admin(ctx)
 
-    tier = request.normalized_tier()
+    # Generate or extract request_id for traceability
+    request_id = http_request.headers.get("X-Request-ID") or str(uuid4())
+
+    tier = tier_request.normalized_tier()
     if tier not in ALLOWED_ORG_TIERS:
         raise HTTPException(status_code=400, detail={
             "ok": False,
@@ -204,7 +210,7 @@ async def set_active_org_tier(
         })
 
     expected = f"SET_TIER:{tier.upper()}"
-    provided = (request.confirm or "").strip().upper()
+    provided = (tier_request.confirm or "").strip().upper()
     if provided != expected:
         raise HTTPException(status_code=400, detail={
             "ok": False,
@@ -227,19 +233,35 @@ async def set_active_org_tier(
     prev = getattr(getattr(org, "tier", None), "value", None) or "free"
     service.update_organization(org_id, {"tier": tier})
 
-    record_audit(
-        actor=ctx["user_id"],
-        action="org_tier_updated",
-        entity="organization",
-        entity_id=org_id,
-        payload={"from": prev, "to": tier},
-    )
+    # AUDIT: FAIL-CLOSED - If audit fails, operation is aborted
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="org_tier_updated",
+            entity="organization",
+            entity_id=org_id,
+            payload={"from": prev, "to": tier},
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Rollback the tier change and abort
+        service.update_organization(org_id, {"tier": prev})
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "ok": False,
+                "error": "AUDIT_FAILED",
+                "message": "Tier update aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
 
     return {
         "ok": True,
         "org_id": org_id,
         "previous_tier": prev,
         "new_tier": tier,
+        "request_id": request_id,
     }
 
 

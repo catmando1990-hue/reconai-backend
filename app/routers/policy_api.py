@@ -1,13 +1,15 @@
 # policy_api.py
 # BUILD 6 — Policy & Disclaimer Enforcement (Read-Only First)
 # Contextual display only. Every acknowledgement audit-logged.
+# AUDIT: FAIL-CLOSED - Audit failures abort the request.
 
 from typing import Optional
-from fastapi import APIRouter, Depends
+from uuid import uuid4
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 
 from app.auth_context import get_current_context, AuthContext
-from app.services.audit_service import record_audit, get_audit_entries
+from app.services.audit_service import record_audit, get_audit_entries, AuditServiceError
 
 
 router = APIRouter(prefix="/api")
@@ -21,31 +23,50 @@ class PolicyAcknowledgeRequest(BaseModel):
 
 @router.post("/policy/acknowledge")
 async def acknowledge_policy(
-    request: PolicyAcknowledgeRequest,
+    policy_request: PolicyAcknowledgeRequest,
+    http_request: Request,
     ctx: AuthContext = Depends(get_current_context),
 ):
     """
     POST /api/policy/acknowledge - Record policy acknowledgement
 
     Every acknowledgement is audit-logged for compliance.
+    AUDIT: FAIL-CLOSED - If audit fails, acknowledgement is aborted.
     """
-    # Record audit entry for policy acknowledgement
-    record_audit(
-        actor=ctx["user_id"],
-        action="policy_acknowledged",
-        entity="policy",
-        entity_id=request.policy,
-        payload={
-            "policy": request.policy,
-            "version": request.version,
-            "context": request.context,
-        },
-    )
+    # Generate or extract request_id for traceability
+    request_id = http_request.headers.get("X-Request-ID") or str(uuid4())
+
+    # AUDIT: FAIL-CLOSED - If this fails, the acknowledgement is aborted
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="policy_acknowledged",
+            entity="policy",
+            entity_id=policy_request.policy,
+            payload={
+                "policy": policy_request.policy,
+                "version": policy_request.version,
+                "context": policy_request.context,
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Abort - policy acknowledgement MUST be recorded
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "ok": False,
+                "error": "AUDIT_FAILED",
+                "message": "Policy acknowledgement aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
 
     return {
         "ok": True,
         "status": "acknowledged",
-        "policy": request.policy,
+        "policy": policy_request.policy,
+        "request_id": request_id,
     }
 
 

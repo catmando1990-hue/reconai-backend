@@ -2,14 +2,16 @@
 # BUILD 4 — Controlled Write Enablement
 # Backend-only. Feature-flagged. Audit-logged.
 # No historical reclassification. Every write audit-logged.
+# AUDIT: FAIL-CLOSED - Audit failures abort the request.
 
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from uuid import uuid4
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel
 
 from app.auth_context import get_current_context, AuthContext
-from app.services.audit_service import record_audit, get_audit_entries, get_audit_count
+from app.services.audit_service import record_audit, get_audit_entries, get_audit_count, AuditServiceError
 
 
 router = APIRouter(prefix="/api")
@@ -36,10 +38,16 @@ class OverrideRequest(BaseModel):
 @router.post("/transactions/{transaction_id}/override")
 async def override_transaction(
     transaction_id: str,
-    request: OverrideRequest,
+    override_request: OverrideRequest,
+    http_request: Request,
     ctx: AuthContext = Depends(get_current_context),
 ):
-    """POST /api/transactions/:id/override - Override transaction category"""
+    """POST /api/transactions/:id/override - Override transaction category
+
+    AUDIT: FAIL-CLOSED - If audit fails, override is aborted.
+    """
+    # Generate or extract request_id for traceability
+    request_id = http_request.headers.get("X-Request-ID") or str(uuid4())
 
     # Feature flag check - writes MUST be disabled by default
     if not WRITE_CONFIG.enabled:
@@ -55,7 +63,7 @@ async def override_transaction(
         )
 
     # Require reason if configured
-    if WRITE_CONFIG.require_reason and not request.reason:
+    if WRITE_CONFIG.require_reason and not override_request.reason:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -69,28 +77,43 @@ async def override_transaction(
     # This only affects future processing, not past transactions
     override = {
         "transaction_id": transaction_id,
-        "category": request.category,
-        "reason": request.reason,
+        "category": override_request.category,
+        "reason": override_request.reason,
         "overridden_by": ctx["user_id"],
         "overridden_at": datetime.utcnow().isoformat(),
     }
     override_store[transaction_id] = override
 
-    # AUDIT LOG - every successful write MUST be logged
-    record_audit(
-        actor=ctx["user_id"],
-        action="transaction_override",
-        entity="transaction",
-        entity_id=transaction_id,
-        payload={"category": request.category, "reason": request.reason},
-    )
+    # AUDIT: FAIL-CLOSED - If this fails, the override is aborted
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="transaction_override",
+            entity="transaction",
+            entity_id=transaction_id,
+            payload={"category": override_request.category, "reason": override_request.reason},
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Rollback the override and abort
+        del override_store[transaction_id]
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "ok": False,
+                "error": "AUDIT_FAILED",
+                "message": "Override aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
 
     return {
         "ok": True,
         "status": "ok",
         "transaction_id": transaction_id,
-        "category": request.category,
+        "category": override_request.category,
         "message": "Transaction override applied successfully",
+        "request_id": request_id,
     }
 
 
@@ -118,9 +141,15 @@ async def get_override(
 @router.delete("/transactions/{transaction_id}/override")
 async def delete_override(
     transaction_id: str,
+    http_request: Request,
     ctx: AuthContext = Depends(get_current_context),
 ):
-    """DELETE /api/transactions/:id/override - Remove override"""
+    """DELETE /api/transactions/:id/override - Remove override
+
+    AUDIT: FAIL-CLOSED - If audit fails, removal is aborted.
+    """
+    # Generate or extract request_id for traceability
+    request_id = http_request.headers.get("X-Request-ID") or str(uuid4())
 
     # Feature flag check
     if not WRITE_CONFIG.enabled:
@@ -134,24 +163,42 @@ async def delete_override(
         )
 
     had_override = transaction_id in override_store
+    removed_override = None
 
     if transaction_id in override_store:
+        removed_override = override_store[transaction_id]
         del override_store[transaction_id]
 
-    # Audit the deletion
-    record_audit(
-        actor=ctx["user_id"],
-        action="transaction_override_removed",
-        entity="transaction",
-        entity_id=transaction_id,
-        payload={"removed": had_override},
-    )
+    # AUDIT: FAIL-CLOSED - If this fails, the removal is aborted
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="transaction_override_removed",
+            entity="transaction",
+            entity_id=transaction_id,
+            payload={"removed": had_override},
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Rollback the removal and abort
+        if removed_override:
+            override_store[transaction_id] = removed_override
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "ok": False,
+                "error": "AUDIT_FAILED",
+                "message": "Override removal aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
 
     return {
         "ok": True,
         "transaction_id": transaction_id,
         "removed": had_override,
         "message": "Override removed" if had_override else "No override existed",
+        "request_id": request_id,
     }
 
 
