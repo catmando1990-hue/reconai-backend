@@ -29,6 +29,7 @@ from uuid import uuid4
 
 from app.auth_context import get_current_context, AuthContext
 from app.entitlements.tiers import require_govcon_entitlement
+from app.govcon.contract import GOVCON_CONTRACT_VERSION
 
 
 async def require_govcon_access(
@@ -185,7 +186,27 @@ class ContractCreate(BaseModel):
 
 
 class ContractResponse(BaseModel):
-    """Contract response with advisory info"""
+    """Contract response with advisory info.
+
+    CONTRACT VERSION: 1
+    - govcon_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present (status + reason_code)
+    - evidence: ALWAYS present (metadata for auditability)
+    """
+    # Contract version - ALWAYS present
+    govcon_version: int = GOVCON_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present
+    lifecycle: dict = Field(default_factory=lambda: {"status": "success", "reason_code": None})
+
+    # Evidence metadata - ALWAYS present
+    evidence: dict = Field(default_factory=lambda: {
+        "sources": ["contracts"],
+        "coverage_window": {"start": None, "end": None},
+        "evaluated_at": datetime.utcnow().isoformat(),
+        "dcaa_compliant": True,
+    })
+
     contract: Contract
     advisory: dict = Field(default_factory=lambda: {
         "type": "advisory",
@@ -370,7 +391,19 @@ async def request_modification(
         }
     )
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["contracts", "modifications"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "modification_id": modification.id,
         "modification_number": mod_number,
         "status": "pending",
@@ -440,7 +473,19 @@ async def approve_modification(
         }
     )
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["contracts", "modifications"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "status": "approved",
         "modification": modification.dict(),
         "contract_updated": True,
@@ -448,7 +493,7 @@ async def approve_modification(
     }
 
 
-@router.get("/{contract_id}/audit-trail", response_model=List[dict])
+@router.get("/{contract_id}/audit-trail", response_model=dict)
 async def get_contract_audit_trail(contract_id: str):
     """
     Get immutable audit trail for a contract (READ-ONLY)
@@ -458,7 +503,21 @@ async def get_contract_audit_trail(contract_id: str):
         if entry["entity_id"] == contract_id or
            entry.get("details", {}).get("contract_id") == contract_id
     ]
-    return trail
+    now = datetime.utcnow().isoformat()
+    return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_log"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
+        "audit_trail": trail,
+    }
 
 
 @router.get("/{contract_id}/funding-status", response_model=dict)
@@ -474,7 +533,19 @@ async def get_funding_status(contract_id: str):
     total_obligated = sum(clin.obligated_amount for clin in contract.clins)
     total_expended = sum(clin.expended_amount for clin in contract.clins)
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["contracts"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "contract_id": contract_id,
         "contract_number": contract.contract_number,
         "total_value": contract.total_value,

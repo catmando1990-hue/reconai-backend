@@ -4,6 +4,11 @@ GovCon / DCAA Compliance Models (Phase 2)
 
 Pydantic models for DCAA-compliant transaction classification,
 evidence chains, and export payloads.
+
+CONTRACT VERSION: 1
+- All responses MUST include govcon_version field
+- All responses MUST include lifecycle (status + reason_code)
+- All responses MUST include evidence metadata
 """
 
 from __future__ import annotations
@@ -11,6 +16,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Literal, Optional, Any, Dict
 from pydantic import BaseModel, Field
+
+from app.govcon.contract import GOVCON_CONTRACT_VERSION
 
 
 # Cost pool types per FAR 31.201
@@ -54,6 +61,55 @@ FARCitation = Literal[
     "NONE",          # No specific citation
 ]
 
+
+# =============================================================================
+# LIFECYCLE STATUS (CONTRACT REQUIREMENT)
+# =============================================================================
+
+GovConLifecycleStatus = Literal["success", "partial", "failed", "no_data"]
+
+
+class Lifecycle(BaseModel):
+    """
+    Lifecycle state for GovCon responses.
+
+    CONTRACT:
+    - status: ALWAYS present (one of: success, partial, failed, no_data)
+    - reason_code: ALWAYS present when status != "success", None otherwise
+    """
+    status: GovConLifecycleStatus
+    reason_code: Optional[str] = None
+
+
+# =============================================================================
+# EVIDENCE METADATA (CONTRACT REQUIREMENT)
+# =============================================================================
+
+class CoverageWindow(BaseModel):
+    """Time range of data analyzed."""
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+
+class EvidenceMetadata(BaseModel):
+    """
+    Evidence metadata for auditability of GovCon responses.
+
+    CONTRACT:
+    - sources: ALWAYS present (list of data sources used)
+    - coverage_window: ALWAYS present (time range of data analyzed)
+    - evaluated_at: ALWAYS present (ISO timestamp of evaluation)
+    - dcaa_compliant: ALWAYS present (boolean)
+    """
+    sources: List[str] = Field(default_factory=list)
+    coverage_window: CoverageWindow = Field(default_factory=CoverageWindow)
+    evaluated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    dcaa_compliant: bool = True
+
+
+# =============================================================================
+# EVIDENCE CHAIN MODELS
+# =============================================================================
 
 class EvidenceChainItem(BaseModel):
     """Single evidence item in the compliance chain."""
@@ -134,7 +190,25 @@ class GovConTransactionOverlay(BaseModel):
 
 
 class GovConTransactionsResponse(BaseModel):
-    """Response with transactions and GovCon compliance overlays."""
+    """
+    Response with transactions and GovCon compliance overlays.
+
+    CONTRACT VERSION: 1
+    - govcon_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present (status + reason_code)
+    - evidence: ALWAYS present (metadata for auditability)
+    """
+
+    # Contract version - ALWAYS present
+    govcon_version: int = GOVCON_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present
+    lifecycle: Lifecycle = Field(
+        default_factory=lambda: Lifecycle(status="success", reason_code=None)
+    )
+
+    # Evidence metadata - ALWAYS present
+    evidence: EvidenceMetadata = Field(default_factory=EvidenceMetadata)
 
     ok: bool
     request_id: str
@@ -170,7 +244,25 @@ class ExportPreviewItem(BaseModel):
 
 
 class ExportPreviewResponse(BaseModel):
-    """Response from export preview (manual-only, no auto-export)."""
+    """
+    Response from export preview (manual-only, no auto-export).
+
+    CONTRACT VERSION: 1
+    - govcon_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present (status + reason_code)
+    - evidence: ALWAYS present (metadata for auditability)
+    """
+
+    # Contract version - ALWAYS present
+    govcon_version: int = GOVCON_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present
+    lifecycle: Lifecycle = Field(
+        default_factory=lambda: Lifecycle(status="success", reason_code=None)
+    )
+
+    # Evidence metadata - ALWAYS present
+    evidence: EvidenceMetadata = Field(default_factory=EvidenceMetadata)
 
     ok: bool
     request_id: str

@@ -36,6 +36,7 @@ from decimal import Decimal
 
 from app.auth_context import get_current_context, AuthContext
 from app.entitlements.tiers import require_govcon_entitlement
+from app.govcon.contract import GOVCON_CONTRACT_VERSION
 
 
 async def require_govcon_access(

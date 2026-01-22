@@ -14,6 +14,9 @@ CANONICAL LAWS ENFORCED:
 - Manual-run only (export must be explicitly triggered)
 - Immutable audit logging for all operations
 - NO writes to source transaction tables
+
+CONTRACT VERSION: 1
+- govcon_version: ALWAYS present in all GovCon API responses
 """
 
 from app.govcon.engine import GovConComplianceEngine
@@ -25,13 +28,36 @@ from app.govcon.models import (
     GovConTransactionOverlay,
     ExportPreviewResponse,
 )
+from app.govcon.contract import (
+    GOVCON_CONTRACT_VERSION,
+    VALID_GOVCON_LIFECYCLE_STATUSES,
+    GovConLifecycle,
+    GovConLifecycleStatus,
+    GovConEvidenceMetadata,
+    GovConResponse,
+    create_govcon_lifecycle,
+    create_govcon_evidence,
+    wrap_govcon_response,
+)
 
 __all__ = [
+    # Engine
     "GovConComplianceEngine",
+    # Models
     "GovConClassification",
     "EvidenceChainItem",
     "CostPoolType",
     "AllowabilityStatus",
     "GovConTransactionOverlay",
     "ExportPreviewResponse",
+    # Contract versioning
+    "GOVCON_CONTRACT_VERSION",
+    "VALID_GOVCON_LIFECYCLE_STATUSES",
+    "GovConLifecycle",
+    "GovConLifecycleStatus",
+    "GovConEvidenceMetadata",
+    "GovConResponse",
+    "create_govcon_lifecycle",
+    "create_govcon_evidence",
+    "wrap_govcon_response",
 ]

@@ -32,7 +32,11 @@ from app.govcon.models import (
     ExportPreviewResponse,
     CostPoolType,
     AllowabilityStatus,
+    Lifecycle,
+    EvidenceMetadata,
+    CoverageWindow,
 )
+from app.govcon.contract import GOVCON_CONTRACT_VERSION
 from app.services.audit_store import insert_audit_event, AuditEventInput
 
 
@@ -70,7 +74,24 @@ class ClassifyRequest(BaseModel):
 
 
 class ClassifyResponse(BaseModel):
-    """Response from GovCon classification endpoint."""
+    """Response from GovCon classification endpoint.
+
+    CONTRACT VERSION: 1
+    - govcon_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present (status + reason_code)
+    - evidence: ALWAYS present (metadata for auditability)
+    """
+
+    # Contract version - ALWAYS present
+    govcon_version: int = GOVCON_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present
+    lifecycle: Lifecycle = Field(
+        default_factory=lambda: Lifecycle(status="success", reason_code=None)
+    )
+
+    # Evidence metadata - ALWAYS present
+    evidence: EvidenceMetadata = Field(default_factory=EvidenceMetadata)
 
     ok: bool
     request_id: str
@@ -459,10 +480,22 @@ async def get_compliance_stats(
                 pool = t.govcon_classification.cost_pool
                 by_cost_pool[pool] = by_cost_pool.get(pool, 0) + 1
 
+        now = datetime.utcnow().isoformat()
         return {
+            # Contract version - ALWAYS present
+            "govcon_version": GOVCON_CONTRACT_VERSION,
+            # Lifecycle - ALWAYS present
+            "lifecycle": {"status": "success", "reason_code": None},
+            # Evidence metadata - ALWAYS present
+            "evidence": {
+                "sources": ["govcon_classifications", "mvp_transactions"],
+                "coverage_window": {"start": None, "end": None},
+                "evaluated_at": now,
+                "dcaa_compliant": True,
+            },
             "ok": True,
             "request_id": request_id,
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": now,
             "stats": {
                 "total_transactions": total,
                 "classified_count": classified_count,

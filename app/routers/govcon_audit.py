@@ -48,6 +48,7 @@ import logging
 
 from app.auth_context import get_current_context, AuthContext
 from app.entitlements.tiers import require_govcon_entitlement
+from app.govcon.contract import GOVCON_CONTRACT_VERSION
 from app.services.audit_store import (
     AuditEventInput,
     AuditEventRecord,
@@ -387,7 +388,19 @@ async def list_audit_entries(
         actor_id=user_id,
     )
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_events"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "entries": [e.dict() for e in entries],
         "total": total,
         "limit": limit,
@@ -411,7 +424,19 @@ async def get_audit_entry(entry_id: str):
 
     entry = _record_to_entry(record)
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_events"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "entry": entry.dict(),
         "integrity_verified": True,
         "advisory": {
@@ -441,7 +466,19 @@ async def get_entity_audit_trail(
     # Reverse to chronological order (oldest first)
     entries.reverse()
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_events"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "entity_type": entity_type,
         "entity_id": entity_id,
         "audit_trail": [e.dict() for e in entries],
@@ -513,7 +550,19 @@ async def export_audit_log(
         dcaa_relevant=True
     )
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_events", "audit_export"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "export_id": export_record.id,
         "entry_count": len(entries),
         "export_hash": export_hash,
@@ -526,21 +575,35 @@ async def export_audit_log(
     }
 
 
-@router.get("/exports", response_model=List[dict])
+@router.get("/exports", response_model=dict)
 async def list_exports():
     """
     List all audit exports (READ-ONLY)
     """
-    return [
-        {
-            "export": e.dict(),
-            "advisory": {
-                "type": "advisory",
-                "message": "Export record for audit trail."
+    now = datetime.utcnow().isoformat()
+    return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_exports"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
+        "exports": [
+            {
+                "export": e.dict(),
+                "advisory": {
+                    "type": "advisory",
+                    "message": "Export record for audit trail."
+                }
             }
-        }
-        for e in _audit_exports
-    ]
+            for e in _audit_exports
+        ]
+    }
 
 
 @router.get("/verify-integrity", response_model=dict)
@@ -553,8 +616,20 @@ async def verify_audit_integrity():
     """
     total = count_audit_events()
 
+    now = datetime.utcnow().isoformat()
     if total == 0:
         return {
+            # Contract version - ALWAYS present
+            "govcon_version": GOVCON_CONTRACT_VERSION,
+            # Lifecycle - ALWAYS present
+            "lifecycle": {"status": "success", "reason_code": None},
+            # Evidence metadata - ALWAYS present
+            "evidence": {
+                "sources": ["audit_events"],
+                "coverage_window": {"start": None, "end": None},
+                "evaluated_at": now,
+                "dcaa_compliant": True,
+            },
             "verified": True,
             "entry_count": 0,
             "message": "Audit log is empty"
@@ -564,6 +639,17 @@ async def verify_audit_integrity():
     is_valid, issues = verify_audit_chain(limit=1000)
 
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success" if is_valid else "partial", "reason_code": None if is_valid else "INTEGRITY_ISSUES"},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_events"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": is_valid,
+        },
         "verified": is_valid,
         "entry_count": total,
         "verified_count": min(total, 1000),
@@ -617,7 +703,19 @@ async def get_audit_summary(
         uid = entry.user_id
         by_user[uid] = by_user.get(uid, 0) + 1
 
+    now = datetime.utcnow().isoformat()
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success", "reason_code": None},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": ["audit_events"],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": True,
+        },
         "total_entries": len(entries),
         "dcaa_relevant_entries": len([e for e in entries if e.dcaa_relevant]),
         "by_event_type": by_event_type,

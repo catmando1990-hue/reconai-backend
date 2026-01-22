@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Request
 
 from app.auth_context import get_current_context
 from app.db import get_db_connection
+from app.govcon.contract import GOVCON_CONTRACT_VERSION
 
 router = APIRouter()
 
@@ -49,7 +51,19 @@ def govcon_audit_verify(request: Request) -> Dict[str, Any]:
                 break
 
         if not table:
+            now = datetime.utcnow().isoformat()
             return {
+                # Contract version - ALWAYS present
+                "govcon_version": GOVCON_CONTRACT_VERSION,
+                # Lifecycle - ALWAYS present
+                "lifecycle": {"status": "no_data", "reason_code": "NO_AUDIT_TABLE"},
+                # Evidence metadata - ALWAYS present
+                "evidence": {
+                    "sources": [],
+                    "coverage_window": {"start": None, "end": None},
+                    "evaluated_at": now,
+                    "dcaa_compliant": True,
+                },
                 "request_id": request_id,
                 "status": "empty",
                 "verified_count": 0,
@@ -65,7 +79,19 @@ def govcon_audit_verify(request: Request) -> Dict[str, Any]:
 
         required = {"prev_hash", "event_hash", "payload"}
         if not required.issubset(set(cols)):
+            now = datetime.utcnow().isoformat()
             return {
+                # Contract version - ALWAYS present
+                "govcon_version": GOVCON_CONTRACT_VERSION,
+                # Lifecycle - ALWAYS present
+                "lifecycle": {"status": "no_data", "reason_code": "MISSING_HASH_COLUMNS"},
+                # Evidence metadata - ALWAYS present
+                "evidence": {
+                    "sources": [table],
+                    "coverage_window": {"start": None, "end": None},
+                    "evaluated_at": now,
+                    "dcaa_compliant": True,
+                },
                 "request_id": request_id,
                 "status": "empty",
                 "verified_count": 0,
@@ -106,7 +132,19 @@ def govcon_audit_verify(request: Request) -> Dict[str, Any]:
             ).fetchall()
 
     if not rows:
+        now = datetime.utcnow().isoformat()
         return {
+            # Contract version - ALWAYS present
+            "govcon_version": GOVCON_CONTRACT_VERSION,
+            # Lifecycle - ALWAYS present
+            "lifecycle": {"status": "no_data", "reason_code": "NO_EVENTS"},
+            # Evidence metadata - ALWAYS present
+            "evidence": {
+                "sources": [table] if table else [],
+                "coverage_window": {"start": None, "end": None},
+                "evaluated_at": now,
+                "dcaa_compliant": True,
+            },
             "request_id": request_id,
             "status": "empty",
             "verified_count": 0,
@@ -136,7 +174,20 @@ def govcon_audit_verify(request: Request) -> Dict[str, Any]:
         )
 
     status = "ok" if verified == len(events) else "error"
+    now = datetime.utcnow().isoformat()
+    is_valid = (verified == len(events))
     return {
+        # Contract version - ALWAYS present
+        "govcon_version": GOVCON_CONTRACT_VERSION,
+        # Lifecycle - ALWAYS present
+        "lifecycle": {"status": "success" if is_valid else "partial", "reason_code": None if is_valid else "HASH_MISMATCH"},
+        # Evidence metadata - ALWAYS present
+        "evidence": {
+            "sources": [table] if table else [],
+            "coverage_window": {"start": None, "end": None},
+            "evaluated_at": now,
+            "dcaa_compliant": is_valid,
+        },
         "request_id": request_id,
         "status": status,
         "verified_count": verified,
