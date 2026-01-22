@@ -363,6 +363,13 @@ def empty_evidence(reason: str = "No data available") -> Dict[str, Any]:
 # LIFECYCLE BUILDER
 # =============================================================================
 
+# Default reason codes per non-success status (fail-closed: no silent defaults)
+_DEFAULT_REASON_CODES: Dict[str, str] = {
+    "partial": "PARTIAL_DATA",
+    "failed": "COMPUTATION_ERROR",
+    "no_data": "INSUFFICIENT_DATA",
+}
+
 
 def lifecycle_factory(
     status: CFOLifecycleStatus = "success",
@@ -375,18 +382,71 @@ def lifecycle_factory(
 
     Args:
         status: Lifecycle status
-        reason_code: Reason code (required for non-success)
+        reason_code: Reason code (required for non-success, uses explicit default if omitted)
 
     Returns:
         Valid lifecycle as a dict
+
+    Raises:
+        ValueError: If status is invalid or reason_code missing for non-success with no default
     """
     if status != "success" and reason_code is None:
-        reason_code = "unknown"
+        # Use explicit default reason_code per status (fail-closed)
+        reason_code = _DEFAULT_REASON_CODES.get(status)
+        if reason_code is None:
+            raise ValueError(
+                f"reason_code is required for lifecycle status '{status}' "
+                f"and no default is defined"
+            )
 
     return {
         "status": status,
         "reason_code": reason_code,
     }
+
+
+def lifecycle_success() -> Dict[str, Any]:
+    """Factory for success lifecycle (reason_code=None)."""
+    return {"status": "success", "reason_code": None}
+
+
+def lifecycle_partial(reason_code: str = "PARTIAL_DATA") -> Dict[str, Any]:
+    """
+    Factory for partial lifecycle.
+
+    Args:
+        reason_code: Required reason code (default: PARTIAL_DATA)
+
+    Returns:
+        Valid lifecycle dict with status="partial"
+    """
+    return {"status": "partial", "reason_code": reason_code}
+
+
+def lifecycle_failed(reason_code: str = "COMPUTATION_ERROR") -> Dict[str, Any]:
+    """
+    Factory for failed lifecycle.
+
+    Args:
+        reason_code: Required reason code (default: COMPUTATION_ERROR)
+
+    Returns:
+        Valid lifecycle dict with status="failed"
+    """
+    return {"status": "failed", "reason_code": reason_code}
+
+
+def lifecycle_no_data(reason_code: str = "INSUFFICIENT_DATA") -> Dict[str, Any]:
+    """
+    Factory for no_data lifecycle.
+
+    Args:
+        reason_code: Required reason code (default: INSUFFICIENT_DATA)
+
+    Returns:
+        Valid lifecycle dict with status="no_data"
+    """
+    return {"status": "no_data", "reason_code": reason_code}
 
 
 # =============================================================================
@@ -624,10 +684,13 @@ def success_cfo_overview() -> Dict[str, Any]:
     )
 
 
-def partial_cfo_overview(reason_code: str = "incomplete_data") -> Dict[str, Any]:
+def partial_cfo_overview(reason_code: str = "PARTIAL_DATA") -> Dict[str, Any]:
     """
     Partial state - Some CFO data available but incomplete.
     Use for testing partial data display.
+
+    Args:
+        reason_code: Required reason code (default: PARTIAL_DATA)
     """
     return cfo_overview_factory(
         lifecycle_status="partial",
@@ -641,10 +704,13 @@ def partial_cfo_overview(reason_code: str = "incomplete_data") -> Dict[str, Any]
     )
 
 
-def failed_cfo_overview(reason_code: str = "computation_error") -> Dict[str, Any]:
+def failed_cfo_overview(reason_code: str = "COMPUTATION_ERROR") -> Dict[str, Any]:
     """
     Failed state - CFO computation failed.
     Use for testing error states.
+
+    Args:
+        reason_code: Required reason code (default: COMPUTATION_ERROR)
     """
     return cfo_overview_factory(
         lifecycle_status="failed",
@@ -654,10 +720,13 @@ def failed_cfo_overview(reason_code: str = "computation_error") -> Dict[str, Any
     )
 
 
-def no_data_cfo_overview(reason_code: str = "insufficient_data") -> Dict[str, Any]:
+def no_data_cfo_overview(reason_code: str = "INSUFFICIENT_DATA") -> Dict[str, Any]:
     """
     No data state - Not enough data for CFO analysis.
     Use for testing empty states.
+
+    Args:
+        reason_code: Required reason code (default: INSUFFICIENT_DATA)
     """
     return cfo_overview_factory(
         lifecycle_status="no_data",
