@@ -1,7 +1,11 @@
 # app/main.py
 from __future__ import annotations
+import logging
 import os
 import sentry_sdk
+
+# Module-level logger for startup diagnostics
+logger = logging.getLogger(__name__)
 
 # Initialize Sentry for error tracking
 sentry_dsn = os.getenv("SENTRY_DSN")
@@ -396,7 +400,18 @@ app.include_router(ai_financial_intelligence_router)
 # STEP 13 — GTM & Pricing API (Read-Only)
 app.include_router(gtm_pricing_router)
 # STEP 13 — Production Readiness API (Read-Only)
-app.include_router(production_readiness_router)
+try:
+    app.include_router(production_readiness_router)
+except Exception as e:
+    logger.critical(
+        "PRODUCTION_READINESS_INIT_FAILED",
+        exc_info=True,
+        extra={
+            "module": "api.production",
+            "reason": str(e),
+        },
+    )
+    raise
 # STEP 13 — ML Governance API (Read-Only)
 app.include_router(ml_governance_router)
 # STEP 13 — Onboarding API (Manual)
