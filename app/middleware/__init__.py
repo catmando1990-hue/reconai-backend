@@ -6,6 +6,11 @@ from .rate_limit import RateLimitMiddleware, ProductionRateLimitMiddleware
 from .body_size_limit import BodySizeLimitMiddleware
 from .error_envelope import register_error_handlers
 from .request_id import RequestIdMiddleware
+from .security_hardening import (
+    MutationRateLimitMiddleware,
+    AuthGuardMiddleware,
+    IdempotencyGuardMiddleware,
+)
 
 __all__ = [
     "AuthContextMiddleware",
@@ -14,4 +19,7 @@ __all__ = [
     "BodySizeLimitMiddleware",
     "register_error_handlers",
     "RequestIdMiddleware",
+    "MutationRateLimitMiddleware",
+    "AuthGuardMiddleware",
+    "IdempotencyGuardMiddleware",
 ]

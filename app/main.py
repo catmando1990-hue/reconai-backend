@@ -210,6 +210,11 @@ from app.middleware import AuthContextMiddleware, RateLimitMiddleware
 from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.incident_guard import IncidentGuardMiddleware
+from app.middleware.security_hardening import (
+    MutationRateLimitMiddleware,
+    AuthGuardMiddleware,
+    IdempotencyGuardMiddleware,
+)
 
 # Phase-1 Hotfix: Middleware ordering corrected
 # In Starlette/FastAPI, LAST added middleware executes FIRST.
@@ -217,6 +222,10 @@ from app.middleware.incident_guard import IncidentGuardMiddleware
 # and LAST on response, ensuring x-request-id is always present.
 app.add_middleware(AuthContextMiddleware)
 app.add_middleware(RateLimitMiddleware)
+# SECURITY HARDENING — Mutation rate limiting (stricter limits on POST/PUT/DELETE)
+app.add_middleware(MutationRateLimitMiddleware)
+# SECURITY HARDENING — Idempotency guard (replay protection on sensitive routes)
+app.add_middleware(IdempotencyGuardMiddleware)
 app.add_middleware(IncidentGuardMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 # BUILD 14 — Request body size limit (1MB default, includes request_id in errors)
