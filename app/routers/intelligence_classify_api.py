@@ -29,8 +29,15 @@ from app.intelligence.models import (
     ClassifyRequest,
     ClassifyResponse,
     TransactionOverlayResponse,
+    Lifecycle,
+    EvidenceMetadata,
+    CoverageWindow,
 )
-from app.guardrails import INTELLIGENCE_CONTRACT_VERSION
+from app.guardrails import (
+    INTELLIGENCE_CONTRACT_VERSION,
+    create_intelligence_lifecycle,
+    create_evidence_metadata,
+)
 from app.services.audit_store import insert_audit_event, AuditEventInput
 
 
@@ -125,8 +132,33 @@ async def classify_transactions(
             )
         )
 
+        # Compute lifecycle status
+        if len(classifications) == 0 and len(duplicates) == 0:
+            lifecycle = Lifecycle(status="no_data", reason_code="NO_TRANSACTIONS_PROCESSED")
+        elif flagged_count == len(classifications) + len(duplicates):
+            lifecycle = Lifecycle(status="partial", reason_code="ALL_REQUIRE_REVIEW")
+        elif flagged_count > 0:
+            lifecycle = Lifecycle(status="partial", reason_code="SOME_REQUIRE_REVIEW")
+        else:
+            lifecycle = Lifecycle(status="success", reason_code=None)
+
+        # Compute average confidence for evidence metadata
+        all_confidences = [c.confidence for c in classifications]
+        all_confidences.extend([d.confidence for d in duplicates])
+        avg_confidence = sum(all_confidences) / len(all_confidences) if all_confidences else 0.0
+
+        # Build evidence metadata
+        evidence_meta = EvidenceMetadata(
+            sources=["transaction_classifications", "duplicate_detection"],
+            coverage_window=CoverageWindow(start=None, end=None),
+            evaluated_at=now,
+            confidence_score=avg_confidence,
+        )
+
         return ClassifyResponse(
             ok=True,
+            lifecycle=lifecycle,
+            evidence=evidence_meta,
             request_id=request_id,
             classified_at=now,
             classifications=classifications,
@@ -225,8 +257,28 @@ async def get_transactions_with_overlay(
             or t.duplicate_group is not None
         )
 
+        # Compute lifecycle status
+        if total == 0:
+            lifecycle = Lifecycle(status="no_data", reason_code="NO_TRANSACTIONS_FOUND")
+        elif classified_count == 0:
+            lifecycle = Lifecycle(status="partial", reason_code="NO_CLASSIFICATIONS")
+        elif flagged_count > 0:
+            lifecycle = Lifecycle(status="partial", reason_code="SOME_FLAGGED")
+        else:
+            lifecycle = Lifecycle(status="success", reason_code=None)
+
+        # Build evidence metadata
+        evidence_meta = EvidenceMetadata(
+            sources=["mvp_transactions", "transaction_classifications", "transaction_evidence"],
+            coverage_window=CoverageWindow(start=None, end=None),
+            evaluated_at=now,
+            confidence_score=0.0,  # Read-only overlay, no aggregate confidence
+        )
+
         return TransactionOverlayResponse(
             ok=True,
+            lifecycle=lifecycle,
+            evidence=evidence_meta,
             request_id=request_id,
             generated_at=now,
             transactions=transactions,
@@ -277,13 +329,32 @@ async def get_classification_stats(
             },
         )
 
+    now = datetime.utcnow().isoformat()
+
     try:
         stats = engine.get_classification_stats(org_id)
+
+        # Compute lifecycle status
+        has_data = stats.get("total_transactions", 0) > 0
+        if not has_data:
+            lifecycle_dict = create_intelligence_lifecycle("no_data", "NO_STATS_DATA")
+        else:
+            lifecycle_dict = create_intelligence_lifecycle("success")
+
+        # Build evidence metadata
+        evidence_dict = create_evidence_metadata(
+            sources=["transaction_classifications", "transaction_evidence"],
+            evaluated_at=now,
+            confidence_score=0.0,  # Stats endpoint, no aggregate confidence
+        )
+
         return {
             "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
+            "lifecycle": lifecycle_dict,  # ALWAYS present
+            "evidence": evidence_dict,  # ALWAYS present
             "ok": True,
             "request_id": request_id,
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": now,
             "stats": stats,
         }
     except Exception as e:

@@ -5,13 +5,19 @@
 #
 # CONTRACT VERSION: 1
 # - intelligence_version: ALWAYS present in response
+# - lifecycle: ALWAYS present in response
+# - evidence: ALWAYS present in response
 
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends
 
 from app.auth_context import get_current_context, AuthContext
-from app.guardrails import INTELLIGENCE_CONTRACT_VERSION
+from app.guardrails import (
+    INTELLIGENCE_CONTRACT_VERSION,
+    create_intelligence_lifecycle,
+    create_evidence_metadata,
+)
 
 
 router = APIRouter(prefix="/api/intelligence")
@@ -33,9 +39,28 @@ async def get_intelligence_status(
     Advisory-only mode: AI provides recommendations but cannot execute writes.
     Manual run required: Intelligence does not run automatically.
     Confidence threshold: ≥ 0.85 required for suggestions.
+
+    CONTRACT VERSION: 1
+    - intelligence_version: ALWAYS present
+    - lifecycle: ALWAYS present
+    - evidence: ALWAYS present
     """
+    now = datetime.utcnow().isoformat()
+
+    # Lifecycle is always success for status endpoint (read-only config)
+    lifecycle = create_intelligence_lifecycle("success")
+
+    # Evidence metadata for status endpoint
+    evidence = create_evidence_metadata(
+        sources=["intelligence_config"],
+        evaluated_at=now,
+        confidence_score=1.0,  # Config is always certain
+    )
+
     return {
         "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
+        "lifecycle": lifecycle,  # ALWAYS present
+        "evidence": evidence,  # ALWAYS present
         "ok": True,
         "enabled": True,
         "mode": "advisory",
@@ -44,5 +69,5 @@ async def get_intelligence_status(
         "categories": ["Categorization", "Duplicates", "Cashflow"],
         "lastRun": _last_run,
         "cache": _cache_status,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": now,
     }

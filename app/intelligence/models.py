@@ -6,6 +6,8 @@ Pydantic models for classification results, evidence, and API contracts.
 
 CONTRACT VERSION: 1
 - All responses MUST include intelligence_version field
+- All responses MUST include lifecycle (status + reason_code)
+- All responses MUST include evidence metadata
 """
 
 from __future__ import annotations
@@ -14,8 +16,61 @@ from datetime import datetime
 from typing import List, Literal, Optional, Any, Dict
 from pydantic import BaseModel, Field
 
-from app.guardrails import INTELLIGENCE_CONTRACT_VERSION
+from app.guardrails import (
+    INTELLIGENCE_CONTRACT_VERSION,
+    create_intelligence_lifecycle,
+    create_evidence_metadata,
+)
 
+
+# =============================================================================
+# LIFECYCLE STATUS (PART 1)
+# =============================================================================
+
+IntelligenceLifecycleStatus = Literal["success", "partial", "failed", "no_data"]
+
+
+class Lifecycle(BaseModel):
+    """
+    Lifecycle state for Intelligence responses.
+
+    CONTRACT:
+    - status: ALWAYS present (one of: success, partial, failed, no_data)
+    - reason_code: ALWAYS present when status != "success", None otherwise
+    """
+    status: IntelligenceLifecycleStatus
+    reason_code: Optional[str] = None
+
+
+# =============================================================================
+# EVIDENCE METADATA (PART 2)
+# =============================================================================
+
+class CoverageWindow(BaseModel):
+    """Time range of data analyzed."""
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+
+class EvidenceMetadata(BaseModel):
+    """
+    Evidence metadata for auditability of Intelligence insights.
+
+    CONTRACT:
+    - sources: ALWAYS present (list of data sources used)
+    - coverage_window: ALWAYS present (time range of data analyzed)
+    - evaluated_at: ALWAYS present (ISO timestamp of evaluation)
+    - confidence_score: ALWAYS present (overall confidence 0.0-1.0)
+    """
+    sources: List[str] = Field(default_factory=list)
+    coverage_window: CoverageWindow = Field(default_factory=CoverageWindow)
+    evaluated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    confidence_score: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+# =============================================================================
+# CLASSIFICATION CATEGORIES AND EVIDENCE TYPES
+# =============================================================================
 
 # Classification categories
 ClassificationCategory = Literal[
@@ -92,10 +147,20 @@ class ClassifyResponse(BaseModel):
 
     CONTRACT VERSION: 1
     - intelligence_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present (status + reason_code)
+    - evidence: ALWAYS present (metadata for auditability)
     """
 
     # Contract version - ALWAYS present
     intelligence_version: int = INTELLIGENCE_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present
+    lifecycle: Lifecycle = Field(
+        default_factory=lambda: Lifecycle(status="success", reason_code=None)
+    )
+
+    # Evidence metadata - ALWAYS present
+    evidence: EvidenceMetadata = Field(default_factory=EvidenceMetadata)
 
     ok: bool
     request_id: str
@@ -139,10 +204,20 @@ class TransactionOverlayResponse(BaseModel):
 
     CONTRACT VERSION: 1
     - intelligence_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present (status + reason_code)
+    - evidence: ALWAYS present (metadata for auditability)
     """
 
     # Contract version - ALWAYS present
     intelligence_version: int = INTELLIGENCE_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present
+    lifecycle: Lifecycle = Field(
+        default_factory=lambda: Lifecycle(status="success", reason_code=None)
+    )
+
+    # Evidence metadata - ALWAYS present
+    evidence: EvidenceMetadata = Field(default_factory=EvidenceMetadata)
 
     ok: bool
     request_id: str

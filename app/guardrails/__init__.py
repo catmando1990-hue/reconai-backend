@@ -4,6 +4,15 @@ from .require_approved_run import enforce_approved_run
 from .intelligence_contract import (
     INTELLIGENCE_CONTRACT_VERSION,
     CONFIDENCE_THRESHOLD,
+    # Lifecycle model (PART 1)
+    IntelligenceLifecycle,
+    IntelligenceLifecycleStatus,
+    VALID_LIFECYCLE_STATUSES,
+    create_intelligence_lifecycle,
+    # Evidence metadata (PART 2)
+    IntelligenceEvidenceMetadata,
+    create_evidence_metadata,
+    # Contract enforcement
     enforce_contract,
     validate_intelligence_result,
     apply_confidence_gating,
@@ -22,6 +31,15 @@ __all__ = [
     "enforce_approved_run",
     "INTELLIGENCE_CONTRACT_VERSION",
     "CONFIDENCE_THRESHOLD",
+    # Lifecycle model
+    "IntelligenceLifecycle",
+    "IntelligenceLifecycleStatus",
+    "VALID_LIFECYCLE_STATUSES",
+    "create_intelligence_lifecycle",
+    # Evidence metadata
+    "IntelligenceEvidenceMetadata",
+    "create_evidence_metadata",
+    # Contract enforcement
     "enforce_contract",
     "validate_intelligence_result",
     "apply_confidence_gating",

@@ -18,7 +18,12 @@ from fastapi.responses import StreamingResponse
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
-from app.guardrails import CONFIDENCE_THRESHOLD, INTELLIGENCE_CONTRACT_VERSION
+from app.guardrails import (
+    CONFIDENCE_THRESHOLD,
+    INTELLIGENCE_CONTRACT_VERSION,
+    create_intelligence_lifecycle,
+    create_evidence_metadata,
+)
 from app.entitlements import guard_export
 
 router = APIRouter(prefix="/api/intelligence/export", tags=["intelligence-export"])
@@ -248,13 +253,30 @@ async def export_intelligence_json(
         policy_acknowledged=True,
     )
 
+    now = datetime.utcnow().isoformat()
+
+    # Compute lifecycle status
+    if len(records) == 0:
+        lifecycle = create_intelligence_lifecycle("no_data", "NO_RECORDS_TO_EXPORT")
+    else:
+        lifecycle = create_intelligence_lifecycle("success")
+
+    # Build evidence metadata
+    evidence = create_evidence_metadata(
+        sources=["evidence_refs"],
+        evaluated_at=now,
+        confidence_score=0.0,  # Export, no aggregate confidence
+    )
+
     return {
         "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
+        "lifecycle": lifecycle,  # ALWAYS present
+        "evidence": evidence,  # ALWAYS present
         "ok": True,
         "export_type": result_type,
         "record_count": len(records),
         "records": records,
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now,
         "policy_acknowledged": True,
     }
 
@@ -304,8 +326,18 @@ async def retain_evidence_ref(
             detail={"error": "RETAIN_FAILED", "message": str(e)}
         )
 
+    # Build lifecycle and evidence
+    lifecycle = create_intelligence_lifecycle("success")
+    evidence_meta = create_evidence_metadata(
+        sources=["evidence_refs"],
+        evaluated_at=now,
+        confidence_score=confidence,  # Use the retained confidence
+    )
+
     return {
         "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
+        "lifecycle": lifecycle,  # ALWAYS present
+        "evidence": evidence_meta,  # ALWAYS present
         "ok": True,
         "ref_id": ref_id,
         "result_type": result_type,
