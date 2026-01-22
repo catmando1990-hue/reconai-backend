@@ -9,6 +9,9 @@ CANONICAL LAWS:
 - Projections ≠ facts
 - Confidence < 0.85 must be flagged
 - Decimal precision for financial data
+- All responses include cfo_version for contract tracking
+
+CONTRACT VERSION: 1
 """
 
 from __future__ import annotations
@@ -18,6 +21,158 @@ from decimal import Decimal
 from typing import List, Literal, Optional, Dict, Any
 
 from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# CFO CONTRACT VERSION (Strict versioning, no silent changes)
+# =============================================================================
+
+# Contract version - increment on breaking changes to CFO API
+CFO_CONTRACT_VERSION = 1
+
+
+# =============================================================================
+# CFO LIFECYCLE MODEL (Explicit state, no inference)
+# =============================================================================
+
+# Valid lifecycle statuses - fail-closed validation
+CFOLifecycleStatus = Literal["success", "partial", "failed", "no_data"]
+VALID_CFO_LIFECYCLE_STATUSES = frozenset({"success", "partial", "failed", "no_data"})
+
+
+class CFOLifecycleValidationError(ValueError):
+    """Raised when lifecycle status is invalid. Fail-closed design."""
+    pass
+
+
+def validate_cfo_lifecycle_status(status: str) -> CFOLifecycleStatus:
+    """
+    Validate CFO lifecycle status. Fail-closed: reject invalid values.
+
+    Args:
+        status: The lifecycle status to validate
+
+    Returns:
+        The validated status (unchanged if valid)
+
+    Raises:
+        CFOLifecycleValidationError: If status is not in VALID_CFO_LIFECYCLE_STATUSES
+    """
+    if status not in VALID_CFO_LIFECYCLE_STATUSES:
+        raise CFOLifecycleValidationError(
+            f"Invalid CFO lifecycle status: '{status}'. "
+            f"Valid values: {sorted(VALID_CFO_LIFECYCLE_STATUSES)}"
+        )
+    return status  # type: ignore
+
+
+class CFOLifecycle(BaseModel):
+    """
+    Explicit lifecycle state for CFO responses.
+
+    CANONICAL LAW: lifecycle MUST always be present.
+    CANONICAL LAW: reason_code MUST be present when status != 'success'.
+    """
+
+    status: CFOLifecycleStatus = Field(
+        description="Lifecycle status: success | partial | failed | no_data"
+    )
+    reason_code: Optional[str] = Field(
+        default=None,
+        description="Required when status != 'success'. Explains why not fully successful."
+    )
+
+    @classmethod
+    def success(cls) -> "CFOLifecycle":
+        """Factory for success lifecycle."""
+        return cls(status="success", reason_code=None)
+
+    @classmethod
+    def partial(cls, reason_code: str) -> "CFOLifecycle":
+        """Factory for partial lifecycle (some data available)."""
+        return cls(status="partial", reason_code=reason_code)
+
+    @classmethod
+    def failed(cls, reason_code: str) -> "CFOLifecycle":
+        """Factory for failed lifecycle."""
+        return cls(status="failed", reason_code=reason_code)
+
+    @classmethod
+    def no_data(cls, reason_code: str) -> "CFOLifecycle":
+        """Factory for no_data lifecycle."""
+        return cls(status="no_data", reason_code=reason_code)
+
+    def model_post_init(self, __context) -> None:
+        """Validate lifecycle invariants after construction."""
+        # Fail-closed validation
+        validate_cfo_lifecycle_status(self.status)
+
+        # Enforce reason_code requirement
+        if self.status != "success" and not self.reason_code:
+            raise CFOLifecycleValidationError(
+                f"reason_code is required when lifecycle status is '{self.status}'"
+            )
+
+
+# =============================================================================
+# EVIDENCE METADATA MODEL (Auditability)
+# =============================================================================
+
+
+class EvidenceMetadata(BaseModel):
+    """
+    Evidence metadata for CFO metrics.
+
+    CANONICAL LAW: Every metric MUST have evidence metadata.
+    CANONICAL LAW: sources, coverage_window, and last_updated_at MUST be present.
+    """
+
+    sources: List[str] = Field(
+        description="Data sources used (e.g., ['mvp_transactions', 'plaid_accounts'])"
+    )
+    coverage_window: Dict[str, Optional[str]] = Field(
+        description="Time window covered: {start: ISO8601, end: ISO8601}"
+    )
+    last_updated_at: str = Field(
+        description="When evidence was last refreshed (ISO8601)"
+    )
+    record_count: int = Field(
+        default=0,
+        description="Number of records used to compute metrics"
+    )
+    confidence_note: Optional[str] = Field(
+        default=None,
+        description="Optional note about data quality or confidence"
+    )
+
+    @classmethod
+    def create(
+        cls,
+        sources: List[str],
+        start_date: Optional[str],
+        end_date: Optional[str],
+        record_count: int = 0,
+        confidence_note: Optional[str] = None,
+    ) -> "EvidenceMetadata":
+        """Factory method for creating evidence metadata."""
+        return cls(
+            sources=sources,
+            coverage_window={"start": start_date, "end": end_date},
+            last_updated_at=datetime.utcnow().isoformat(),
+            record_count=record_count,
+            confidence_note=confidence_note,
+        )
+
+    @classmethod
+    def empty(cls, reason: str) -> "EvidenceMetadata":
+        """Factory for empty evidence (no data available)."""
+        return cls(
+            sources=[],
+            coverage_window={"start": None, "end": None},
+            last_updated_at=datetime.utcnow().isoformat(),
+            record_count=0,
+            confidence_note=reason,
+        )
 
 
 # ============================================================================
@@ -204,7 +359,27 @@ class FinancialException(BaseModel):
 
 
 class CFOOverviewResponse(BaseModel):
-    """Response for GET /api/cfo/overview."""
+    """
+    Response for GET /api/cfo/overview.
+
+    CONTRACT VERSION: 1
+    - cfo_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present, explicit state
+    - evidence: ALWAYS present, auditability metadata
+    """
+
+    # Contract version - ALWAYS present
+    cfo_version: int = CFO_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present (no inference)
+    lifecycle: CFOLifecycle = Field(
+        description="Explicit lifecycle state. reason_code required when status != 'success'"
+    )
+
+    # Evidence metadata - ALWAYS present (auditability)
+    evidence: EvidenceMetadata = Field(
+        description="Data sources, coverage window, and freshness"
+    )
 
     ok: bool = True
     request_id: str
@@ -245,7 +420,27 @@ class CFOOverviewResponse(BaseModel):
 
 
 class ForecastResponse(BaseModel):
-    """Response for GET /api/cfo/forecast."""
+    """
+    Response for GET /api/cfo/forecast.
+
+    CONTRACT VERSION: 1
+    - cfo_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present, explicit state
+    - evidence: ALWAYS present, auditability metadata
+    """
+
+    # Contract version - ALWAYS present
+    cfo_version: int = CFO_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present (no inference)
+    lifecycle: CFOLifecycle = Field(
+        description="Explicit lifecycle state. reason_code required when status != 'success'"
+    )
+
+    # Evidence metadata - ALWAYS present (auditability)
+    evidence: EvidenceMetadata = Field(
+        description="Data sources, coverage window, and freshness"
+    )
 
     ok: bool = True
     request_id: str
@@ -277,7 +472,27 @@ class ForecastResponse(BaseModel):
 
 
 class ExceptionsResponse(BaseModel):
-    """Response for GET /api/cfo/exceptions."""
+    """
+    Response for GET /api/cfo/exceptions.
+
+    CONTRACT VERSION: 1
+    - cfo_version: ALWAYS present, integer
+    - lifecycle: ALWAYS present, explicit state
+    - evidence: ALWAYS present, auditability metadata
+    """
+
+    # Contract version - ALWAYS present
+    cfo_version: int = CFO_CONTRACT_VERSION
+
+    # Lifecycle - ALWAYS present (no inference)
+    lifecycle: CFOLifecycle = Field(
+        description="Explicit lifecycle state. reason_code required when status != 'success'"
+    )
+
+    # Evidence metadata - ALWAYS present (auditability)
+    evidence: EvidenceMetadata = Field(
+        description="Data sources, coverage window, and freshness"
+    )
 
     ok: bool = True
     request_id: str

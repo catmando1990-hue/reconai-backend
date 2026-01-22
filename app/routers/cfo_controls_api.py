@@ -33,6 +33,9 @@ from app.cfo.models import (
     ExceptionsResponse,
     PeriodType,
     ExceptionSeverity,
+    CFO_CONTRACT_VERSION,
+    CFOLifecycle,
+    EvidenceMetadata,
 )
 from app.services.audit_store import insert_audit_event, AuditEventInput
 
@@ -124,11 +127,32 @@ async def get_cfo_overview(
             "requires_review": burn_rate.requires_review,
         }
 
+        # Determine lifecycle status based on data availability
+        total_records = sum(r.transaction_count for r in monthly_rollups)
+        if total_records == 0:
+            lifecycle = CFOLifecycle.no_data(reason_code="NO_TRANSACTION_DATA")
+        elif burn_rate.requires_review or burn_rate.confidence < 0.85:
+            lifecycle = CFOLifecycle.partial(reason_code="LOW_CONFIDENCE_METRICS")
+        else:
+            lifecycle = CFOLifecycle.success()
+
+        # Build evidence metadata
+        period_dates = [r.period_start.isoformat() for r in monthly_rollups] + [r.period_end.isoformat() for r in monthly_rollups]
+        evidence = EvidenceMetadata.create(
+            sources=["mvp_transactions", "cfo_rollups"],
+            start_date=min(period_dates) if period_dates else None,
+            end_date=max(period_dates) if period_dates else None,
+            record_count=total_records,
+            confidence_note=f"Burn rate confidence: {burn_rate.confidence:.2f}" if burn_rate else None,
+        )
+
         return CFOOverviewResponse(
             ok=True,
             request_id=request_id,
             org_id=org_id,
             generated_at=now,
+            lifecycle=lifecycle,
+            evidence=evidence,
             kpis=kpis,
             monthly_rollups=monthly_rollups,
             quarterly_rollups=quarterly_rollups,
@@ -245,11 +269,30 @@ async def get_forecast(
             )
         )
 
+        # Determine lifecycle status based on forecast quality
+        if len(forecast_series.forecasts) == 0:
+            lifecycle = CFOLifecycle.no_data(reason_code="INSUFFICIENT_HISTORY")
+        elif forecast_series.min_confidence < 0.85:
+            lifecycle = CFOLifecycle.partial(reason_code="LOW_CONFIDENCE_FORECASTS")
+        else:
+            lifecycle = CFOLifecycle.success()
+
+        # Build evidence metadata
+        evidence = EvidenceMetadata.create(
+            sources=["mvp_transactions", "cfo_rollups", "forecast_engine"],
+            start_date=None,  # Historical start not directly available
+            end_date=now,
+            record_count=forecast_series.historical_data_points,
+            confidence_note=f"Overall confidence: {forecast_series.overall_confidence:.2f}, Min: {forecast_series.min_confidence:.2f}",
+        )
+
         return ForecastResponse(
             ok=True,
             request_id=request_id,
             org_id=org_id,
             generated_at=now,
+            lifecycle=lifecycle,
+            evidence=evidence,
             forecasts=forecast_series,
             audit_event_id=audit_event.id,
             guardrails={
@@ -361,11 +404,33 @@ async def get_exceptions(
         critical_count = sum(1 for e in exceptions if e.severity == "critical")
         high_count = sum(1 for e in exceptions if e.severity == "high")
 
+        # Determine lifecycle status
+        if total_count == 0 and not detect_new:
+            lifecycle = CFOLifecycle.success()  # No exceptions is good
+        elif critical_count > 0:
+            lifecycle = CFOLifecycle.partial(reason_code="CRITICAL_EXCEPTIONS_DETECTED")
+        elif high_count > 0:
+            lifecycle = CFOLifecycle.partial(reason_code="HIGH_SEVERITY_EXCEPTIONS_DETECTED")
+        else:
+            lifecycle = CFOLifecycle.success()
+
+        # Build evidence metadata
+        detection_dates = [e.detected_at for e in exceptions]
+        evidence = EvidenceMetadata.create(
+            sources=["mvp_transactions", "exception_detector"],
+            start_date=min(detection_dates) if detection_dates else None,
+            end_date=max(detection_dates) if detection_dates else None,
+            record_count=total_count,
+            confidence_note=f"Detection ran: {detect_new}, {len(exceptions)} exceptions in current page",
+        )
+
         return ExceptionsResponse(
             ok=True,
             request_id=request_id,
             org_id=org_id,
             generated_at=now,
+            lifecycle=lifecycle,
+            evidence=evidence,
             exceptions=exceptions,
             total_count=total_count,
             critical_count=critical_count,
@@ -431,7 +496,27 @@ async def get_cfo_stats(
         monthly_rollups = engine.get_recent_rollups(org_id, "monthly", limit=12)
         quarterly_rollups = engine.get_recent_rollups(org_id, "quarterly", limit=4)
 
+        # Determine lifecycle status
+        if len(monthly_rollups) == 0:
+            lifecycle = CFOLifecycle.no_data(reason_code="NO_ROLLUP_DATA")
+        elif burn_rate.confidence < 0.85:
+            lifecycle = CFOLifecycle.partial(reason_code="LOW_CONFIDENCE_STATS")
+        else:
+            lifecycle = CFOLifecycle.success()
+
+        # Build evidence metadata
+        evidence = EvidenceMetadata.create(
+            sources=["mvp_transactions", "cfo_rollups", "cfo_exceptions"],
+            start_date=None,
+            end_date=now,
+            record_count=len(monthly_rollups) + len(quarterly_rollups),
+            confidence_note=f"Stats summary, burn confidence: {burn_rate.confidence:.2f}",
+        )
+
         return {
+            "cfo_version": CFO_CONTRACT_VERSION,  # ALWAYS present
+            "lifecycle": lifecycle.model_dump(),  # ALWAYS present
+            "evidence": evidence.model_dump(),  # ALWAYS present
             "ok": True,
             "request_id": request_id,
             "generated_at": now,
