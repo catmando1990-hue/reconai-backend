@@ -2,6 +2,8 @@
 from __future__ import annotations
 import logging
 import os
+import sys
+import traceback
 import sentry_sdk
 
 # Module-level logger for startup diagnostics
@@ -402,14 +404,13 @@ app.include_router(gtm_pricing_router)
 # STEP 13 — Production Readiness API (Read-Only)
 try:
     app.include_router(production_readiness_router)
-except Exception as e:
+except Exception:
+    print("PRODUCTION_READINESS_INIT_FAILED", file=sys.stderr)
+    traceback.print_exc()
     logger.critical(
         "PRODUCTION_READINESS_INIT_FAILED",
         exc_info=True,
-        extra={
-            "module": "api.production",
-            "reason": str(e),
-        },
+        extra={"module": "api.production"},
     )
     raise
 # STEP 13 — ML Governance API (Read-Only)
