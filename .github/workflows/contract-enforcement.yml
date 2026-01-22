@@ -1,8 +1,8 @@
 # Contract Enforcement - Backend
-# This workflow prevents silent contract drift for CORE, CFO, and Intelligence APIs
+# This workflow prevents silent contract drift for CORE, CFO, Intelligence, and GovCon APIs
 #
 # PART 3: Change Gate
-# - Detects changes to /api/core/state, /api/cfo/*, and /api/intelligence/* endpoints
+# - Detects changes to /api/core/state, /api/cfo/*, /api/intelligence/*, and /api/govcon/* endpoints
 # - Requires fixture updates when contracts change
 # - Runs schema validation tests
 
@@ -16,7 +16,7 @@ on:
 
 jobs:
   contract-check:
-    name: Contract Check (CORE + CFO + Intelligence)
+    name: Contract Check (CORE + CFO + Intelligence + GovCon)
     runs-on: ubuntu-latest
 
     steps:
@@ -220,3 +220,71 @@ jobs:
         run: |
           echo "Running Intelligence standalone contract tests..."
           python tests/test_intelligence_contract_standalone.py
+
+      # =========================================================================
+      # GOVCON CONTRACT ENFORCEMENT (DCAA Compliance)
+      # =========================================================================
+
+      - name: Check GovCon contract files for changes
+        id: govcon-contract-changes
+        run: |
+          echo "Checking for GovCon/DCAA contract changes..."
+
+          GOVCON_CONTRACT_CHANGED=false
+          GOVCON_FIXTURE_CHANGED=false
+
+          # Check if GovCon model files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "app/govcon/models.py"; then
+            echo "Contract file changed: app/govcon/models.py"
+            GOVCON_CONTRACT_CHANGED=true
+          fi
+
+          # Check if GovCon contract file changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "app/govcon/contract.py"; then
+            echo "Contract file changed: app/govcon/contract.py"
+            GOVCON_CONTRACT_CHANGED=true
+          fi
+
+          # Check if GovCon router files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "app/routers/govcon"; then
+            echo "Contract file changed: app/routers/govcon*.py"
+            GOVCON_CONTRACT_CHANGED=true
+          fi
+
+          # Check if fixture files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "tests/fixtures/govcon_state_factory.py"; then
+            echo "Fixture file changed: tests/fixtures/govcon_state_factory.py"
+            GOVCON_FIXTURE_CHANGED=true
+          fi
+
+          echo "contract_changed=$GOVCON_CONTRACT_CHANGED" >> $GITHUB_OUTPUT
+          echo "fixture_changed=$GOVCON_FIXTURE_CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Verify GovCon fixture updates for contract changes
+        if: steps.govcon-contract-changes.outputs.contract_changed == 'true'
+        run: |
+          if [ "${{ steps.govcon-contract-changes.outputs.fixture_changed }}" != "true" ]; then
+            echo "❌ BLOCKED: GovCon/DCAA contract changed but fixtures not updated!"
+            echo ""
+            echo "GovCon contract files were modified. Check for:"
+            echo "  - app/govcon/models.py"
+            echo "  - app/govcon/contract.py"
+            echo "  - app/routers/govcon*.py"
+            echo ""
+            echo "You MUST update the test fixtures to match:"
+            echo "  - tests/fixtures/govcon_state_factory.py"
+            echo ""
+            echo "DCAA COMPLIANCE NOTICE: GovCon contract changes affect audit trail integrity."
+            exit 1
+          fi
+          echo "✅ GovCon contract changed AND fixtures updated - DCAA compliance verified"
+
+      - name: Run GovCon contract tests
+        run: |
+          echo "Running GovCon/DCAA contract tests..."
+          python -m pytest tests/test_govcon_contract.py -v
+
+      - name: Run GovCon state factory self-tests
+        run: |
+          echo "Running GovCon state factory self-tests..."
+          python -c "exec(open('tests/fixtures/govcon_state_factory.py').read()); _run_self_tests()"

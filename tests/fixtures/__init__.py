@@ -67,6 +67,32 @@ from .intelligence_state_factory import (
     success_intelligence_overlay,
 )
 
+from .govcon_state_factory import (
+    # Schema assertion
+    GovConSchemaValidationError,
+    assert_valid_govcon_state,
+    # Lifecycle and evidence builders
+    govcon_lifecycle_factory,
+    govcon_evidence_factory,
+    govcon_empty_evidence,
+    # Classification builders
+    govcon_classification_factory,
+    govcon_transaction_overlay_factory,
+    # Transactions response factories
+    govcon_transactions_factory,
+    success_govcon_transactions,
+    partial_govcon_transactions,
+    failed_govcon_transactions,
+    no_data_govcon_transactions,
+    pending_review_govcon_transactions,
+    # Export preview factories
+    export_preview_item_factory,
+    govcon_export_preview_factory,
+    success_export_preview,
+    blocked_export_preview,
+    failed_export_preview,
+)
+
 __all__ = [
     # Core State
     "SchemaValidationError",
@@ -110,4 +136,23 @@ __all__ = [
     "low_confidence_intelligence_classify",
     "intelligence_overlay_factory",
     "success_intelligence_overlay",
+    # GovCon State
+    "GovConSchemaValidationError",
+    "assert_valid_govcon_state",
+    "govcon_lifecycle_factory",
+    "govcon_evidence_factory",
+    "govcon_empty_evidence",
+    "govcon_classification_factory",
+    "govcon_transaction_overlay_factory",
+    "govcon_transactions_factory",
+    "success_govcon_transactions",
+    "partial_govcon_transactions",
+    "failed_govcon_transactions",
+    "no_data_govcon_transactions",
+    "pending_review_govcon_transactions",
+    "export_preview_item_factory",
+    "govcon_export_preview_factory",
+    "success_export_preview",
+    "blocked_export_preview",
+    "failed_export_preview",
 ]
