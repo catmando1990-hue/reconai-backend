@@ -5,6 +5,18 @@ import types
 from app.main import app
 from app.auth_context import get_current_identity, get_org_service
 
+# Import canonical fixtures for CORE state testing
+from tests.fixtures import (
+    assert_valid_core_state,
+    core_state_factory,
+    empty_org_state,
+    partial_org_state,
+    full_org_state,
+    with_sync_running,
+    with_sync_failed,
+    with_stale_data,
+)
+
 @pytest.fixture
 def client():
     app.dependency_overrides = {}
@@ -69,3 +81,50 @@ def mock_db(mocker):
     # Also patch app.db for other tests
     mocker.patch("app.db.sqlite3.connect", return_value=mock_conn)
     return mock_conn
+
+
+# =============================================================================
+# CANONICAL CORE STATE FIXTURES
+# =============================================================================
+
+
+@pytest.fixture
+def empty_core_state():
+    """Fixture: Empty organization state (no data available)."""
+    return empty_org_state()
+
+
+@pytest.fixture
+def partial_core_state():
+    """Fixture: Partial organization state (some data available)."""
+    return partial_org_state()
+
+
+@pytest.fixture
+def full_core_state():
+    """Fixture: Full organization state (all data available)."""
+    return full_org_state()
+
+
+@pytest.fixture
+def running_sync_state():
+    """Fixture: State with sync currently running."""
+    return with_sync_running()
+
+
+@pytest.fixture
+def failed_sync_state():
+    """Fixture: State with failed sync."""
+    return with_sync_failed("Test sync failure")
+
+
+@pytest.fixture
+def stale_data_state():
+    """Fixture: State with stale data (>24h old)."""
+    return with_stale_data(hours_ago=48)
+
+
+@pytest.fixture
+def validate_core_state():
+    """Fixture: Schema validation helper."""
+    return assert_valid_core_state

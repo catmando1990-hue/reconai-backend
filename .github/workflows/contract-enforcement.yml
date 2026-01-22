@@ -1,0 +1,91 @@
+# CORE State Contract Enforcement - Backend
+# This workflow prevents silent contract drift
+#
+# PART 3: Change Gate
+# - Detects changes to /api/core/state endpoint
+# - Requires fixture updates when contract changes
+# - Runs schema validation tests
+
+name: Contract Enforcement
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  contract-check:
+    name: CORE State Contract Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-mock
+
+      - name: Check contract files for changes
+        id: contract-changes
+        run: |
+          echo "Checking for CORE state contract changes..."
+
+          CONTRACT_CHANGED=false
+          FIXTURE_CHANGED=false
+
+          # Check if contract files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "app/routers/core_state.py"; then
+            echo "Contract file changed: app/routers/core_state.py"
+            CONTRACT_CHANGED=true
+          fi
+
+          # Check if fixture files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "tests/fixtures/core_state_factory.py"; then
+            echo "Fixture file changed: tests/fixtures/core_state_factory.py"
+            FIXTURE_CHANGED=true
+          fi
+
+          echo "contract_changed=$CONTRACT_CHANGED" >> $GITHUB_OUTPUT
+          echo "fixture_changed=$FIXTURE_CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Verify fixture updates for contract changes
+        if: steps.contract-changes.outputs.contract_changed == 'true'
+        run: |
+          if [ "${{ steps.contract-changes.outputs.fixture_changed }}" != "true" ]; then
+            echo "❌ BLOCKED: Contract changed but fixtures not updated!"
+            echo ""
+            echo "CORE State contract file was modified:"
+            echo "  - app/routers/core_state.py"
+            echo ""
+            echo "You MUST update the test fixtures to match:"
+            echo "  - tests/fixtures/core_state_factory.py"
+            echo ""
+            exit 1
+          fi
+          echo "✅ Contract changed AND fixtures updated - compliance verified"
+
+      - name: Run contract tests
+        run: |
+          echo "Running CORE state contract tests..."
+          python -m pytest tests/test_core_sync_contract.py -v
+
+      - name: Run schema validation tests
+        run: |
+          echo "Running schema validation tests..."
+          python -m pytest tests/test_core_state_schema.py -v
+
+      - name: Run standalone contract tests
+        run: |
+          echo "Running standalone contract tests..."
+          python tests/test_core_sync_contract_standalone.py
