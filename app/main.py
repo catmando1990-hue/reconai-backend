@@ -156,6 +156,8 @@ from app.routers.external_audit_api import router as external_audit_router
 from app.routers.evidence_export_api import router as evidence_export_router
 # P0 — Profile Completion API (Onboarding Unblock)
 from app.routers.profile_complete import router as profile_complete_router
+# CORE — Single Source of Truth for Organization State (Metrics, Sync)
+from app.routers.core_state import router as core_state_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -448,6 +450,8 @@ app.include_router(external_audit_router)
 app.include_router(evidence_export_router)
 # P0 — Profile Completion API (Onboarding Unblock, Atomic, Idempotent)
 app.include_router(profile_complete_router)
+# CORE — Single Source of Truth for Organization State (Manual-Trigger, Derived Metrics)
+app.include_router(core_state_router)
 
 
 @app.on_event("startup")

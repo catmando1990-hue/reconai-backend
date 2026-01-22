@@ -723,6 +723,70 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_webhook_processed ON plaid_webhook_events(processed)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_webhook_created ON plaid_webhook_events(created_at)")
 
+        # =================================================================
+        # CORE SYNC TABLES (Single source of truth for org state)
+        # =================================================================
+
+        # CORE sync metadata - tracks sync state per organization
+        # sync_status: 'never' | 'success' | 'failed' | 'syncing'
+        # last_successful_sync_at: ONLY set on FULL successful sync (never partial)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS core_sync_metadata (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL UNIQUE,
+                last_synced_at TEXT,
+                last_successful_sync_at TEXT,
+                last_sync_request_id TEXT,
+                transactions_synced INTEGER,
+                entities_derived INTEGER,
+                sync_status TEXT DEFAULT 'never',
+                error_message TEXT,
+                last_retry_at TEXT,
+                retry_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_sync_org ON core_sync_metadata(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_sync_status ON core_sync_metadata(sync_status)")
+
+        # CORE transactions - persisted from Plaid, normalized
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS core_transactions (
+                id TEXT PRIMARY KEY,
+                organization_id TEXT NOT NULL,
+                plaid_transaction_id TEXT UNIQUE,
+                plaid_item_id TEXT,
+                account_id TEXT,
+                amount REAL NOT NULL,
+                date TEXT NOT NULL,
+                name TEXT NOT NULL,
+                merchant_name TEXT,
+                merchant_normalized TEXT,
+                category TEXT,
+                category_id TEXT,
+                pending INTEGER DEFAULT 0,
+                payment_channel TEXT,
+                iso_currency_code TEXT DEFAULT 'USD',
+                transaction_type TEXT,
+                is_income INTEGER DEFAULT 0,
+                is_expense INTEGER DEFAULT 0,
+                linked_vendor_id TEXT,
+                linked_customer_id TEXT,
+                linked_invoice_id TEXT,
+                linked_bill_id TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_org ON core_transactions(organization_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_plaid_id ON core_transactions(plaid_transaction_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_date ON core_transactions(date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_merchant ON core_transactions(merchant_normalized)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_item ON core_transactions(plaid_item_id)")
+
         conn.commit()
         print("Multi-tenancy database tables created")
 
