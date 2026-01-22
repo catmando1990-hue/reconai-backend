@@ -1,9 +1,9 @@
-# CORE State Contract Enforcement - Backend
-# This workflow prevents silent contract drift
+# Contract Enforcement - Backend
+# This workflow prevents silent contract drift for CORE and CFO APIs
 #
 # PART 3: Change Gate
-# - Detects changes to /api/core/state endpoint
-# - Requires fixture updates when contract changes
+# - Detects changes to /api/core/state and /api/cfo/* endpoints
+# - Requires fixture updates when contracts change
 # - Runs schema validation tests
 
 name: Contract Enforcement
@@ -16,7 +16,7 @@ on:
 
 jobs:
   contract-check:
-    name: CORE State Contract Check
+    name: Contract Check (CORE + CFO)
     runs-on: ubuntu-latest
 
     steps:
@@ -36,34 +36,38 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-mock
 
-      - name: Check contract files for changes
-        id: contract-changes
+      # =========================================================================
+      # CORE STATE CONTRACT ENFORCEMENT
+      # =========================================================================
+
+      - name: Check CORE contract files for changes
+        id: core-contract-changes
         run: |
           echo "Checking for CORE state contract changes..."
 
-          CONTRACT_CHANGED=false
-          FIXTURE_CHANGED=false
+          CORE_CONTRACT_CHANGED=false
+          CORE_FIXTURE_CHANGED=false
 
           # Check if contract files changed
           if git diff --name-only HEAD~1 HEAD | grep -q "app/routers/core_state.py"; then
             echo "Contract file changed: app/routers/core_state.py"
-            CONTRACT_CHANGED=true
+            CORE_CONTRACT_CHANGED=true
           fi
 
           # Check if fixture files changed
           if git diff --name-only HEAD~1 HEAD | grep -q "tests/fixtures/core_state_factory.py"; then
             echo "Fixture file changed: tests/fixtures/core_state_factory.py"
-            FIXTURE_CHANGED=true
+            CORE_FIXTURE_CHANGED=true
           fi
 
-          echo "contract_changed=$CONTRACT_CHANGED" >> $GITHUB_OUTPUT
-          echo "fixture_changed=$FIXTURE_CHANGED" >> $GITHUB_OUTPUT
+          echo "contract_changed=$CORE_CONTRACT_CHANGED" >> $GITHUB_OUTPUT
+          echo "fixture_changed=$CORE_FIXTURE_CHANGED" >> $GITHUB_OUTPUT
 
-      - name: Verify fixture updates for contract changes
-        if: steps.contract-changes.outputs.contract_changed == 'true'
+      - name: Verify CORE fixture updates for contract changes
+        if: steps.core-contract-changes.outputs.contract_changed == 'true'
         run: |
-          if [ "${{ steps.contract-changes.outputs.fixture_changed }}" != "true" ]; then
-            echo "❌ BLOCKED: Contract changed but fixtures not updated!"
+          if [ "${{ steps.core-contract-changes.outputs.fixture_changed }}" != "true" ]; then
+            echo "❌ BLOCKED: CORE contract changed but fixtures not updated!"
             echo ""
             echo "CORE State contract file was modified:"
             echo "  - app/routers/core_state.py"
@@ -73,19 +77,79 @@ jobs:
             echo ""
             exit 1
           fi
-          echo "✅ Contract changed AND fixtures updated - compliance verified"
+          echo "✅ CORE contract changed AND fixtures updated - compliance verified"
 
-      - name: Run contract tests
+      - name: Run CORE contract tests
         run: |
           echo "Running CORE state contract tests..."
           python -m pytest tests/test_core_sync_contract.py -v
 
-      - name: Run schema validation tests
+      - name: Run CORE schema validation tests
         run: |
-          echo "Running schema validation tests..."
+          echo "Running CORE schema validation tests..."
           python -m pytest tests/test_core_state_schema.py -v
 
-      - name: Run standalone contract tests
+      - name: Run CORE standalone contract tests
         run: |
-          echo "Running standalone contract tests..."
+          echo "Running CORE standalone contract tests..."
           python tests/test_core_sync_contract_standalone.py
+
+      # =========================================================================
+      # CFO CONTRACT ENFORCEMENT
+      # =========================================================================
+
+      - name: Check CFO contract files for changes
+        id: cfo-contract-changes
+        run: |
+          echo "Checking for CFO contract changes..."
+
+          CFO_CONTRACT_CHANGED=false
+          CFO_FIXTURE_CHANGED=false
+
+          # Check if CFO model files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "app/cfo/models.py"; then
+            echo "Contract file changed: app/cfo/models.py"
+            CFO_CONTRACT_CHANGED=true
+          fi
+
+          # Check if CFO router files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "app/cfo/router.py"; then
+            echo "Contract file changed: app/cfo/router.py"
+            CFO_CONTRACT_CHANGED=true
+          fi
+
+          # Check if fixture files changed
+          if git diff --name-only HEAD~1 HEAD | grep -q "tests/fixtures/cfo_state_factory.py"; then
+            echo "Fixture file changed: tests/fixtures/cfo_state_factory.py"
+            CFO_FIXTURE_CHANGED=true
+          fi
+
+          echo "contract_changed=$CFO_CONTRACT_CHANGED" >> $GITHUB_OUTPUT
+          echo "fixture_changed=$CFO_FIXTURE_CHANGED" >> $GITHUB_OUTPUT
+
+      - name: Verify CFO fixture updates for contract changes
+        if: steps.cfo-contract-changes.outputs.contract_changed == 'true'
+        run: |
+          if [ "${{ steps.cfo-contract-changes.outputs.fixture_changed }}" != "true" ]; then
+            echo "❌ BLOCKED: CFO contract changed but fixtures not updated!"
+            echo ""
+            echo "CFO contract files were modified. Check for:"
+            echo "  - app/cfo/models.py"
+            echo "  - app/cfo/router.py"
+            echo ""
+            echo "You MUST update the test fixtures to match:"
+            echo "  - tests/fixtures/cfo_state_factory.py"
+            echo ""
+            exit 1
+          fi
+          echo "✅ CFO contract changed AND fixtures updated - compliance verified"
+
+      - name: Run CFO contract tests
+        run: |
+          echo "Running CFO contract tests..."
+          python -m pytest tests/test_cfo_contract.py -v
+
+      - name: Run CFO standalone contract tests
+        run: |
+          echo "Running CFO standalone contract tests..."
+          python tests/test_cfo_contract_standalone.py

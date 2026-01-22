@@ -8,7 +8,9 @@
 
 ## Contract Changes
 
-<!-- If you modified /api/core/state, check these boxes -->
+<!-- If you modified /api/core/state or /api/cfo/*, check these boxes -->
+
+### CORE State Contract
 
 - [ ] Did `/api/core/state` contract change? If yes:
   - [ ] Updated `tests/fixtures/core_state_factory.py` to match new schema
@@ -16,6 +18,15 @@
   - [ ] All tests still pass with `assert_valid_core_state()`
   - [ ] Coordinated with frontend team on schema changes
   - [ ] Updated `VALID_SYNC_STATUSES` if enum changed
+
+### CFO Contract
+
+- [ ] Did `/api/cfo/*` contract change? If yes:
+  - [ ] Updated `tests/fixtures/cfo_state_factory.py` to match new schema
+  - [ ] Updated `CFO_CONTRACT_VERSION` if breaking change
+  - [ ] All tests still pass with `assert_valid_cfo_state()`
+  - [ ] Coordinated with frontend team on schema changes
+  - [ ] Updated `VALID_CFO_LIFECYCLE_STATUSES` if enum changed
 
 ## Risk Level
 
