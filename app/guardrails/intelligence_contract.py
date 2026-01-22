@@ -16,6 +16,13 @@ from typing import Any, Dict, List, Optional, TypedDict
 from fastapi import HTTPException
 
 
+# =============================================================================
+# CONTRACT VERSION (Strict versioning, no silent changes)
+# =============================================================================
+
+# Contract version - increment on breaking changes to Intelligence API
+INTELLIGENCE_CONTRACT_VERSION = 1
+
 # Contract constants
 CONFIDENCE_THRESHOLD = 0.85
 MODE = "advisory"
@@ -30,7 +37,13 @@ class IntelligenceResult(TypedDict, total=False):
 
 
 class IntelligenceResponse(TypedDict):
-    """Standard intelligence response envelope."""
+    """
+    Standard intelligence response envelope.
+
+    CONTRACT VERSION: 1
+    - intelligence_version: ALWAYS present, integer
+    """
+    intelligence_version: int  # ALWAYS present - contract version
     ok: bool
     mode: str
     writes_allowed: bool
@@ -135,6 +148,7 @@ def enforce_contract(
     gated_results, filtered_count = apply_confidence_gating(valid_results, threshold)
 
     return {
+        "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
         "ok": True,
         "mode": MODE,
         "writes_allowed": WRITES_ALLOWED,
@@ -160,10 +174,14 @@ def wrap_intelligence_response(
 
     This is a convenience function for routes that want full control
     but still want the standard envelope structure.
+
+    CONTRACT VERSION: 1
+    - intelligence_version: ALWAYS present in response
     """
     enforced = enforce_contract(results)
 
     response = {
+        "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
         "ok": enforced["ok"],
         "mode": enforced["mode"],
         "writes_allowed": enforced["writes_allowed"],

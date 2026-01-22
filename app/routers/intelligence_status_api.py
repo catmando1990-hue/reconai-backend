@@ -2,12 +2,16 @@
 # BUILD 28-30 — Intelligence Status (Read-only)
 # Returns intelligence system status for Settings page.
 # Advisory-only mode with confidence gating.
+#
+# CONTRACT VERSION: 1
+# - intelligence_version: ALWAYS present in response
 
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends
 
 from app.auth_context import get_current_context, AuthContext
+from app.guardrails import INTELLIGENCE_CONTRACT_VERSION
 
 
 router = APIRouter(prefix="/api/intelligence")
@@ -31,6 +35,7 @@ async def get_intelligence_status(
     Confidence threshold: ≥ 0.85 required for suggestions.
     """
     return {
+        "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
         "ok": True,
         "enabled": True,
         "mode": "advisory",

@@ -18,7 +18,7 @@ from fastapi.responses import StreamingResponse
 
 from app.auth_context import get_current_context, AuthContext
 from app.db import DB_PATH
-from app.guardrails import CONFIDENCE_THRESHOLD
+from app.guardrails import CONFIDENCE_THRESHOLD, INTELLIGENCE_CONTRACT_VERSION
 from app.entitlements import guard_export
 
 router = APIRouter(prefix="/api/intelligence/export", tags=["intelligence-export"])
@@ -249,6 +249,7 @@ async def export_intelligence_json(
     )
 
     return {
+        "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
         "ok": True,
         "export_type": result_type,
         "record_count": len(records),
@@ -304,6 +305,7 @@ async def retain_evidence_ref(
         )
 
     return {
+        "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
         "ok": True,
         "ref_id": ref_id,
         "result_type": result_type,

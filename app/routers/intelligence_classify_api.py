@@ -30,6 +30,7 @@ from app.intelligence.models import (
     ClassifyResponse,
     TransactionOverlayResponse,
 )
+from app.guardrails import INTELLIGENCE_CONTRACT_VERSION
 from app.services.audit_store import insert_audit_event, AuditEventInput
 
 
@@ -279,6 +280,7 @@ async def get_classification_stats(
     try:
         stats = engine.get_classification_stats(org_id)
         return {
+            "intelligence_version": INTELLIGENCE_CONTRACT_VERSION,  # ALWAYS present
             "ok": True,
             "request_id": request_id,
             "generated_at": datetime.utcnow().isoformat(),

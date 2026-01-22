@@ -3,6 +3,9 @@
 Transaction Intelligence Models (Phase 1)
 
 Pydantic models for classification results, evidence, and API contracts.
+
+CONTRACT VERSION: 1
+- All responses MUST include intelligence_version field
 """
 
 from __future__ import annotations
@@ -10,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Literal, Optional, Any, Dict
 from pydantic import BaseModel, Field
+
+from app.guardrails import INTELLIGENCE_CONTRACT_VERSION
 
 
 # Classification categories
@@ -82,7 +87,15 @@ class ClassifyRequest(BaseModel):
 
 
 class ClassifyResponse(BaseModel):
-    """Response from classification endpoint."""
+    """
+    Response from classification endpoint.
+
+    CONTRACT VERSION: 1
+    - intelligence_version: ALWAYS present, integer
+    """
+
+    # Contract version - ALWAYS present
+    intelligence_version: int = INTELLIGENCE_CONTRACT_VERSION
 
     ok: bool
     request_id: str
@@ -121,7 +134,15 @@ class TransactionWithClassification(BaseModel):
 
 
 class TransactionOverlayResponse(BaseModel):
-    """Response with transactions and their classification overlays."""
+    """
+    Response with transactions and their classification overlays.
+
+    CONTRACT VERSION: 1
+    - intelligence_version: ALWAYS present, integer
+    """
+
+    # Contract version - ALWAYS present
+    intelligence_version: int = INTELLIGENCE_CONTRACT_VERSION
 
     ok: bool
     request_id: str

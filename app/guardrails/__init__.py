@@ -2,6 +2,7 @@
 
 from .require_approved_run import enforce_approved_run
 from .intelligence_contract import (
+    INTELLIGENCE_CONTRACT_VERSION,
     CONFIDENCE_THRESHOLD,
     enforce_contract,
     validate_intelligence_result,
@@ -19,6 +20,7 @@ from .encryption_hardening import (
 
 __all__ = [
     "enforce_approved_run",
+    "INTELLIGENCE_CONTRACT_VERSION",
     "CONFIDENCE_THRESHOLD",
     "enforce_contract",
     "validate_intelligence_result",
