@@ -35,8 +35,10 @@ import json
 import logging
 import os
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from app.auth_context import AuthContext, get_current_context
 from app.models.plaid import (
@@ -51,8 +53,83 @@ from app.models.plaid import (
     WebhookResponse,
 )
 from app.services.plaid_service import PlaidService, get_plaid_service
+from app.services.audit_service import record_audit, AuditServiceError
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# AUDIT PROVENANCE HELPERS (FAIL-CLOSED)
+# =============================================================================
+
+
+def _validate_request_id(request_id: Optional[str]) -> str:
+    """
+    Validate X-Request-ID header.
+
+    FAIL-CLOSED: If missing or invalid, abort the request.
+
+    Args:
+        request_id: The X-Request-ID header value
+
+    Returns:
+        Validated request_id string
+
+    Raises:
+        HTTPException: If request_id is missing or invalid
+    """
+    if not request_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "PROVENANCE_ERROR",
+                "error_code": "MISSING_REQUEST_ID",
+                "message": "X-Request-ID header is required for audit provenance",
+            },
+        )
+
+    # Validate UUID format
+    try:
+        UUID(request_id)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "PROVENANCE_ERROR",
+                "error_code": "INVALID_REQUEST_ID",
+                "message": "X-Request-ID must be a valid UUID",
+            },
+        )
+
+    return request_id
+
+
+def _build_provenance_response(
+    data: dict,
+    request_id: str,
+    status_code: int = 200,
+) -> JSONResponse:
+    """
+    Build a response with provenance headers and body.
+
+    Ensures request_id is in both X-Request-ID header and body.
+
+    Args:
+        data: Response data dict
+        request_id: The validated request_id
+        status_code: HTTP status code
+
+    Returns:
+        JSONResponse with provenance header and body field
+    """
+    # Ensure request_id is in the body
+    data["request_id"] = request_id
+
+    return JSONResponse(
+        status_code=status_code,
+        headers={"X-Request-ID": request_id},
+        content=data,
+    )
 
 router = APIRouter(prefix="/api/plaid", tags=["plaid"])
 
@@ -75,25 +152,58 @@ def _get_user_agent(request: Request) -> Optional[str]:
 # =============================================================================
 
 
-@router.post("/create-link-token", response_model=CreateLinkTokenResponse)
+@router.post("/create-link-token")
 async def create_link_token(
     payload: CreateLinkTokenRequest,
     request: Request,
     ctx: AuthContext = Depends(get_current_context),
     plaid_service: PlaidService = Depends(get_plaid_service),
-) -> CreateLinkTokenResponse:
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+) -> JSONResponse:
     """
     Create a Plaid Link token for connecting a bank account.
 
     **Auth Required:** Yes (Bearer token)
     **Org Scoped:** Yes
+    **Audit Provenance:** FAIL-CLOSED - X-Request-ID required
 
     The link token is used to initialize Plaid Link in the frontend.
     Products enabled: transactions, auth, balance
 
     Returns:
-        CreateLinkTokenResponse with link_token and expiration
+        JSONResponse with link_token, expiration, and X-Request-ID header
     """
+    # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
+    request_id = _validate_request_id(x_request_id)
+
+    # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="plaid.create_link_token",
+            entity="plaid",
+            entity_id=ctx["org_id"],
+            payload={
+                "entity_id": payload.entity_id,
+                "has_redirect_uri": bool(payload.redirect_uri),
+                "ip_address": _get_client_ip(request),
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Audit failure aborts the request
+        logger.error(f"Audit failed for create_link_token: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "AUDIT_FAILED",
+                "error_code": "AUDIT_WRITE_FAILED",
+                "message": "Link token creation aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
+
+    # Call Plaid service
     response = plaid_service.create_link_token(
         organization_id=ctx["org_id"],
         user_id=ctx["user_id"],
@@ -108,8 +218,25 @@ async def create_link_token(
             f"Link token creation failed: org={ctx['org_id']} "
             f"error={response.error.error_code if response.error else 'unknown'}"
         )
+        # Return error with provenance
+        return _build_provenance_response(
+            data={
+                "success": False,
+                "error": response.error.model_dump() if response.error else None,
+            },
+            request_id=request_id,
+            status_code=400,
+        )
 
-    return response
+    # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
+    return _build_provenance_response(
+        data={
+            "success": True,
+            "link_token": response.link_token,
+            "expiration": response.expiration,
+        },
+        request_id=request_id,
+    )
 
 
 # =============================================================================
@@ -117,18 +244,20 @@ async def create_link_token(
 # =============================================================================
 
 
-@router.post("/exchange-public-token", response_model=ExchangePublicTokenResponse)
+@router.post("/exchange-public-token")
 async def exchange_public_token(
     payload: ExchangePublicTokenRequest,
     request: Request,
     ctx: AuthContext = Depends(get_current_context),
     plaid_service: PlaidService = Depends(get_plaid_service),
-) -> ExchangePublicTokenResponse:
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+) -> JSONResponse:
     """
     Exchange a Plaid public token for an access token.
 
     **Auth Required:** Yes (Bearer token)
     **Org Scoped:** Yes
+    **Audit Provenance:** FAIL-CLOSED - X-Request-ID required
 
     The access token is encrypted at rest (AES-256-GCM) and stored
     with the organization. This endpoint detects duplicate items and
@@ -141,8 +270,11 @@ async def exchange_public_token(
     Audit logged: token_exchanged, item_created
 
     Returns:
-        ExchangePublicTokenResponse with item_id and is_duplicate flag
+        JSONResponse with item_id, is_duplicate flag, and X-Request-ID header
     """
+    # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
+    request_id = _validate_request_id(x_request_id)
+
     if not payload.public_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -150,8 +282,37 @@ async def exchange_public_token(
                 "error": "VALIDATION_ERROR",
                 "error_code": "MISSING_PUBLIC_TOKEN",
                 "message": "public_token is required",
+                "request_id": request_id,
             },
         )
+
+    # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="plaid.exchange_public_token",
+            entity="plaid",
+            entity_id=ctx["org_id"],
+            payload={
+                "institution_id": payload.institution_id,
+                "institution_name": payload.institution_name,
+                "entity_id": payload.entity_id,
+                "ip_address": _get_client_ip(request),
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Audit failure aborts the request
+        logger.error(f"Audit failed for exchange_public_token: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "AUDIT_FAILED",
+                "error_code": "AUDIT_WRITE_FAILED",
+                "message": "Token exchange aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
 
     response = plaid_service.exchange_public_token(
         organization_id=ctx["org_id"],
@@ -169,7 +330,15 @@ async def exchange_public_token(
             f"Token exchange failed: org={ctx['org_id']} "
             f"error={response.error.error_code if response.error else 'unknown'}"
         )
-        return response
+        # Return error with provenance
+        return _build_provenance_response(
+            data={
+                "success": False,
+                "error": response.error.model_dump() if response.error else None,
+            },
+            request_id=request_id,
+            status_code=400,
+        )
 
     # P0 HARD FAIL: item_id is REQUIRED on success - no silent fallbacks
     if not response.item_id:
@@ -182,10 +351,21 @@ async def exchange_public_token(
                 "error": "PLAID_ERROR",
                 "error_code": "MISSING_ITEM_ID",
                 "message": "Plaid exchange succeeded but item_id was not returned",
+                "request_id": request_id,
             },
         )
 
-    return response
+    # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
+    return _build_provenance_response(
+        data={
+            "success": True,
+            "item_id": response.item_id,
+            "is_duplicate": response.is_duplicate,
+            "institution_id": response.institution_id,
+            "institution_name": response.institution_name,
+        },
+        request_id=request_id,
+    )
 
 
 # =============================================================================
@@ -193,18 +373,20 @@ async def exchange_public_token(
 # =============================================================================
 
 
-@router.post("/transactions/sync", response_model=TransactionsSyncResponse)
+@router.post("/transactions/sync")
 async def sync_transactions(
     payload: TransactionsSyncRequest,
     request: Request,
     ctx: AuthContext = Depends(get_current_context),
     plaid_service: PlaidService = Depends(get_plaid_service),
-) -> TransactionsSyncResponse:
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+) -> JSONResponse:
     """
     Sync transactions for a connected Plaid item.
 
     **Auth Required:** Yes (Bearer token)
     **Org Scoped:** Yes (validates item belongs to org)
+    **Audit Provenance:** FAIL-CLOSED - X-Request-ID required
 
     Uses Plaid's cursor-based /transactions/sync endpoint for efficient
     incremental synchronization. This is a MANUAL-ONLY operation - there
@@ -220,8 +402,11 @@ async def sync_transactions(
     Audit logged: sync_started, sync_completed, sync_failed
 
     Returns:
-        TransactionsSyncResponse with transactions and pagination info
+        JSONResponse with transactions, pagination info, and X-Request-ID header
     """
+    # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
+    request_id = _validate_request_id(x_request_id)
+
     if not payload.item_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -229,6 +414,7 @@ async def sync_transactions(
                 "error": "VALIDATION_ERROR",
                 "error_code": "MISSING_ITEM_ID",
                 "message": "item_id is required",
+                "request_id": request_id,
             },
         )
 
@@ -241,8 +427,36 @@ async def sync_transactions(
                 "error": "ITEM_ERROR",
                 "error_code": "ITEM_NOT_FOUND",
                 "message": f"Plaid item {payload.item_id} not found for this organization",
+                "request_id": request_id,
             },
         )
+
+    # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="plaid.sync_transactions",
+            entity="plaid",
+            entity_id=payload.item_id,
+            payload={
+                "org_id": ctx["org_id"],
+                "count": payload.count,
+                "ip_address": _get_client_ip(request),
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Audit failure aborts the request
+        logger.error(f"Audit failed for sync_transactions: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "AUDIT_FAILED",
+                "error_code": "AUDIT_WRITE_FAILED",
+                "message": "Transaction sync aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
 
     response = plaid_service.sync_transactions(
         organization_id=ctx["org_id"],
@@ -258,8 +472,29 @@ async def sync_transactions(
             f"Transaction sync failed: org={ctx['org_id']} item={payload.item_id} "
             f"error={response.error.error_code if response.error else 'unknown'}"
         )
+        # Return error with provenance
+        return _build_provenance_response(
+            data={
+                "success": False,
+                "error": response.error.model_dump() if response.error else None,
+            },
+            request_id=request_id,
+            status_code=400,
+        )
 
-    return response
+    # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
+    return _build_provenance_response(
+        data={
+            "success": True,
+            "added": [tx.model_dump() for tx in response.added],
+            "modified": [tx.model_dump() for tx in response.modified],
+            "removed": response.removed,
+            "next_cursor": response.next_cursor,
+            "has_more": response.has_more,
+            "accounts": [acc.model_dump() for acc in response.accounts],
+        },
+        request_id=request_id,
+    )
 
 
 # =============================================================================
@@ -374,47 +609,118 @@ async def handle_webhook(
 # =============================================================================
 
 
-@router.get("/items", response_model=ListPlaidItemsResponse)
+@router.get("/items")
 async def list_items(
+    request: Request,
     entity_id: Optional[str] = None,
     ctx: AuthContext = Depends(get_current_context),
     plaid_service: PlaidService = Depends(get_plaid_service),
-) -> ListPlaidItemsResponse:
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+) -> JSONResponse:
     """
     List all connected Plaid items for the organization.
 
     **Auth Required:** Yes (Bearer token)
     **Org Scoped:** Yes
+    **Audit Provenance:** FAIL-CLOSED - X-Request-ID required
 
     Returns all bank connections for the organization, optionally
     filtered by entity_id.
 
     Returns:
-        ListPlaidItemsResponse with list of PlaidItemInfo
+        JSONResponse with list of PlaidItemInfo and X-Request-ID header
     """
+    # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
+    request_id = _validate_request_id(x_request_id)
+
+    # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="plaid.list_items",
+            entity="plaid",
+            entity_id=ctx["org_id"],
+            payload={
+                "entity_id": entity_id,
+                "ip_address": _get_client_ip(request),
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Audit failure aborts the request
+        logger.error(f"Audit failed for list_items: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "AUDIT_FAILED",
+                "error_code": "AUDIT_WRITE_FAILED",
+                "message": "List items aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
+
     response = plaid_service.list_items(
         organization_id=ctx["org_id"],
         entity_id=entity_id,
     )
 
-    return response
+    # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
+    return _build_provenance_response(
+        data={
+            "success": response.success,
+            "items": [item.model_dump() for item in response.items] if response.items else [],
+        },
+        request_id=request_id,
+    )
 
 
 @router.get("/items/{item_id}")
 async def get_item(
     item_id: str,
+    request: Request,
     ctx: AuthContext = Depends(get_current_context),
     plaid_service: PlaidService = Depends(get_plaid_service),
-):
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+) -> JSONResponse:
     """
     Get details for a specific Plaid item.
 
     **Auth Required:** Yes (Bearer token)
     **Org Scoped:** Yes (validates ownership)
+    **Audit Provenance:** FAIL-CLOSED - X-Request-ID required
 
     Returns:
-        PlaidItemInfo or 404 if not found
+        JSONResponse with PlaidItemInfo and X-Request-ID header, or 404 if not found
     """
+    # PART 1: INGRESS PROVENANCE - Validate X-Request-ID (FAIL-CLOSED)
+    request_id = _validate_request_id(x_request_id)
+
+    # PART 2: AUDIT WRITE - Write audit synchronously via canonical audit_store (FAIL-CLOSED)
+    try:
+        record_audit(
+            actor=ctx["user_id"],
+            action="plaid.get_item",
+            entity="plaid",
+            entity_id=item_id,
+            payload={
+                "org_id": ctx["org_id"],
+                "ip_address": _get_client_ip(request),
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        # FAIL-CLOSED: Audit failure aborts the request
+        logger.error(f"Audit failed for get_item: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": "AUDIT_FAILED",
+                "error_code": "AUDIT_WRITE_FAILED",
+                "message": "Get item aborted: audit recording failed",
+                "request_id": request_id,
+            },
+        ) from e
+
     item = plaid_service.get_item_for_org(ctx["org_id"], item_id)
 
     if not item:
@@ -424,10 +730,15 @@ async def get_item(
                 "error": "ITEM_ERROR",
                 "error_code": "ITEM_NOT_FOUND",
                 "message": f"Plaid item {item_id} not found for this organization",
+                "request_id": request_id,
             },
         )
 
-    return {
-        "success": True,
-        "item": item,
-    }
+    # PART 3: EGRESS PROVENANCE - Echo request_id in header and body
+    return _build_provenance_response(
+        data={
+            "success": True,
+            "item": item,
+        },
+        request_id=request_id,
+    )
