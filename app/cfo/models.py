@@ -72,6 +72,9 @@ class CFOLifecycle(BaseModel):
 
     CANONICAL LAW: lifecycle MUST always be present.
     CANONICAL LAW: reason_code MUST be present when status != 'success'.
+
+    Domain guard enforced via __init__, not Pydantic validators.
+    Raises CFOLifecycleValidationError (not generic ValidationError).
     """
 
     status: CFOLifecycleStatus = Field(
@@ -81,6 +84,24 @@ class CFOLifecycle(BaseModel):
         default=None,
         description="Required when status != 'success'. Explains why not fully successful."
     )
+
+    def __init__(self, **data):
+        """
+        Construct CFOLifecycle with explicit domain guard.
+
+        Raises:
+            CFOLifecycleValidationError: If lifecycle invariants are violated.
+                - Invalid status value
+                - Missing reason_code when status != 'success'
+        """
+        super().__init__(**data)
+        # Fail-closed status validation
+        validate_cfo_lifecycle_status(self.status)
+        # Domain invariant: reason_code required for non-success
+        if self.status != "success" and not self.reason_code:
+            raise CFOLifecycleValidationError(
+                f"reason_code is required when lifecycle status is '{self.status}'"
+            )
 
     @classmethod
     def success(cls) -> "CFOLifecycle":
@@ -101,17 +122,6 @@ class CFOLifecycle(BaseModel):
     def no_data(cls, reason_code: str) -> "CFOLifecycle":
         """Factory for no_data lifecycle."""
         return cls(status="no_data", reason_code=reason_code)
-
-    def model_post_init(self, __context) -> None:
-        """Validate lifecycle invariants after construction."""
-        # Fail-closed validation
-        validate_cfo_lifecycle_status(self.status)
-
-        # Enforce reason_code requirement
-        if self.status != "success" and not self.reason_code:
-            raise CFOLifecycleValidationError(
-                f"reason_code is required when lifecycle status is '{self.status}'"
-            )
 
 
 # =============================================================================
