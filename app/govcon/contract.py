@@ -90,22 +90,25 @@ class GovConEvidenceMetadata(TypedDict):
     Evidence metadata for auditability of GovCon responses.
 
     CONTRACT:
+    - documents: ALWAYS present (list of supporting document references)
     - sources: ALWAYS present (list of data sources used)
     - coverage_window: ALWAYS present (time range of data analyzed)
-    - evaluated_at: ALWAYS present (ISO timestamp of evaluation)
+    - last_verified_at: ALWAYS present (ISO timestamp of last verification)
     - dcaa_compliant: ALWAYS present (boolean indicating DCAA compliance)
     """
-    sources: List[str]
+    documents: List[str]  # Supporting document references
+    sources: List[str]  # Data sources used
     coverage_window: Dict[str, Optional[str]]  # {"start": ISO, "end": ISO}
-    evaluated_at: str  # ISO timestamp
+    last_verified_at: str  # ISO timestamp of last verification
     dcaa_compliant: bool
 
 
 def create_govcon_evidence(
     sources: List[str],
+    documents: Optional[List[str]] = None,
     coverage_start: Optional[str] = None,
     coverage_end: Optional[str] = None,
-    evaluated_at: Optional[str] = None,
+    last_verified_at: Optional[str] = None,
     dcaa_compliant: bool = True,
 ) -> GovConEvidenceMetadata:
     """
@@ -113,21 +116,23 @@ def create_govcon_evidence(
 
     Args:
         sources: List of data sources (e.g., ["govcon_classifications", "evidence_chain"])
+        documents: List of supporting document references (e.g., ["FAR_31_201", "CAS_418"])
         coverage_start: ISO timestamp for start of data window
         coverage_end: ISO timestamp for end of data window
-        evaluated_at: ISO timestamp of evaluation (defaults to now)
+        last_verified_at: ISO timestamp of last verification (defaults to now)
         dcaa_compliant: Whether the response is DCAA compliant
 
     Returns:
         Validated GovConEvidenceMetadata
     """
     return {
+        "documents": documents or [],
         "sources": sources or [],
         "coverage_window": {
             "start": coverage_start,
             "end": coverage_end,
         },
-        "evaluated_at": evaluated_at or datetime.utcnow().isoformat(),
+        "last_verified_at": last_verified_at or datetime.utcnow().isoformat(),
         "dcaa_compliant": dcaa_compliant,
     }
 
@@ -154,6 +159,7 @@ class GovConResponse(TypedDict):
 def wrap_govcon_response(
     ok: bool = True,
     sources: Optional[List[str]] = None,
+    documents: Optional[List[str]] = None,
     coverage_start: Optional[str] = None,
     coverage_end: Optional[str] = None,
     lifecycle_status: str = "success",
@@ -172,6 +178,7 @@ def wrap_govcon_response(
     Args:
         ok: Whether the operation succeeded
         sources: List of data sources used
+        documents: List of supporting document references
         coverage_start: ISO timestamp for start of data window
         coverage_end: ISO timestamp for end of data window
         lifecycle_status: Lifecycle status (success, partial, failed, no_data)
@@ -187,9 +194,10 @@ def wrap_govcon_response(
     lifecycle = create_govcon_lifecycle(lifecycle_status, lifecycle_reason)
     evidence = create_govcon_evidence(
         sources=sources or ["govcon_api"],
+        documents=documents or [],
         coverage_start=coverage_start,
         coverage_end=coverage_end,
-        evaluated_at=now,
+        last_verified_at=now,
         dcaa_compliant=dcaa_compliant,
     )
 

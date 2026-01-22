@@ -96,14 +96,16 @@ class EvidenceMetadata(BaseModel):
     Evidence metadata for auditability of GovCon responses.
 
     CONTRACT:
+    - documents: ALWAYS present (list of supporting document references)
     - sources: ALWAYS present (list of data sources used)
     - coverage_window: ALWAYS present (time range of data analyzed)
-    - evaluated_at: ALWAYS present (ISO timestamp of evaluation)
+    - last_verified_at: ALWAYS present (ISO timestamp of last verification)
     - dcaa_compliant: ALWAYS present (boolean)
     """
+    documents: List[str] = Field(default_factory=list)
     sources: List[str] = Field(default_factory=list)
     coverage_window: CoverageWindow = Field(default_factory=CoverageWindow)
-    evaluated_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    last_verified_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
     dcaa_compliant: bool = True
 
 

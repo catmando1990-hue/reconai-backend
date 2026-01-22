@@ -102,6 +102,18 @@ class TestGovConLifecycleValidation:
 class TestGovConEvidenceMetadata:
     """Tests for evidence metadata validation logic."""
 
+    def test_evidence_includes_documents(self):
+        """Evidence MUST include documents array."""
+        evidence = create_govcon_evidence(["source"], documents=["FAR_31_201", "CAS_418"])
+        assert "documents" in evidence
+        assert evidence["documents"] == ["FAR_31_201", "CAS_418"]
+
+    def test_evidence_includes_documents_default_empty(self):
+        """Evidence documents MUST default to empty array."""
+        evidence = create_govcon_evidence(["source"])
+        assert "documents" in evidence
+        assert evidence["documents"] == []
+
     def test_evidence_includes_sources(self):
         """Evidence MUST include sources list."""
         evidence = create_govcon_evidence(["source1", "source2"])
@@ -115,11 +127,11 @@ class TestGovConEvidenceMetadata:
         assert "start" in evidence["coverage_window"]
         assert "end" in evidence["coverage_window"]
 
-    def test_evidence_includes_evaluated_at(self):
-        """Evidence MUST include evaluated_at timestamp."""
+    def test_evidence_includes_last_verified_at(self):
+        """Evidence MUST include last_verified_at timestamp."""
         evidence = create_govcon_evidence(["source"])
-        assert "evaluated_at" in evidence
-        assert isinstance(evidence["evaluated_at"], str)
+        assert "last_verified_at" in evidence
+        assert isinstance(evidence["last_verified_at"], str)
 
     def test_evidence_includes_dcaa_compliant(self):
         """Evidence MUST include dcaa_compliant boolean."""
@@ -153,9 +165,10 @@ class TestWrapGovConResponse:
         """wrap_govcon_response MUST return evidence metadata."""
         response = wrap_govcon_response(ok=True, sources=["test"])
         assert "evidence" in response
+        assert "documents" in response["evidence"]
         assert "sources" in response["evidence"]
         assert "coverage_window" in response["evidence"]
-        assert "evaluated_at" in response["evidence"]
+        assert "last_verified_at" in response["evidence"]
         assert "dcaa_compliant" in response["evidence"]
 
     def test_wrap_response_version_is_integer(self):
@@ -285,8 +298,11 @@ class TestGovConTransactionsResponseModel:
         )
         data = response.model_dump()
         assert "evidence" in data
+        assert "documents" in data["evidence"]
         assert "sources" in data["evidence"]
-        assert "evaluated_at" in data["evidence"]
+        assert "coverage_window" in data["evidence"]
+        assert "last_verified_at" in data["evidence"]
+        assert "dcaa_compliant" in data["evidence"]
 
 
 # =============================================================================
