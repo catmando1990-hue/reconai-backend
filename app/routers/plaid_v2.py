@@ -691,7 +691,7 @@ async def list_items(
     return provenance_response(
         payload={
             "success": response.success,
-            "items": [item.model_dump() for item in response.items] if response.items else [],
+            "items": [item.model_dump(mode='json') for item in response.items] if response.items else [],
         },
         request_id=request_id,
     )
