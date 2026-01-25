@@ -38,6 +38,7 @@ ENTITY_TYPE_EXPORT = "s3_export"
 EVENT_EXPORT_CREATED = "export_created"
 EVENT_EXPORT_DOWNLOADED = "export_downloaded"
 EVENT_EXPORT_EXPIRED = "export_expired"
+EVENT_EXPORT_PROVENANCE_LINKED = "export_provenance_linked"
 
 
 def _emit_audit_event(
@@ -225,5 +226,65 @@ def log_export_expired(
         org_id=org_id,
         user_id="system",  # Lifecycle jobs run as system
         request_id=job_run_id,
+        metadata=metadata,
+    )
+
+
+def log_export_provenance_linked(
+    export_id: str,
+    evidence_ids: list,
+    evidence_type: str,
+    user_id: str,
+    request_id: Optional[str] = None,
+) -> bool:
+    """
+    Log an export_provenance_linked audit event.
+
+    Called when an export is linked to source evidence records.
+    This creates an immutable record of the provenance chain.
+
+    Args:
+        export_id: The export ID
+        evidence_ids: List of evidence IDs linked to this export
+        evidence_type: Type of evidence (e.g., "evidence_refs", "audit_events")
+        user_id: User ID who created the links
+        request_id: Request ID for tracing
+
+    Returns:
+        True if event was recorded successfully
+    """
+    # Get org_id from export record (needed for audit event)
+    org_id = "unknown"
+    try:
+        import sqlite3
+        from app.db import DB_PATH
+
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.execute(
+                "SELECT org_id FROM s3_exports WHERE id = ?",
+                (export_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                org_id = row[0]
+    except Exception:
+        pass  # Non-blocking, use "unknown" if lookup fails
+
+    metadata: Dict[str, Any] = {
+        "evidence_type": evidence_type,
+        "evidence_count": len(evidence_ids),
+        "evidence_ids": evidence_ids[:50],  # Limit to first 50 to avoid bloat
+    }
+
+    if len(evidence_ids) > 50:
+        metadata["evidence_ids_truncated"] = True
+        metadata["total_evidence_count"] = len(evidence_ids)
+
+    return _emit_audit_event(
+        event_type=EVENT_EXPORT_PROVENANCE_LINKED,
+        export_id=export_id,
+        org_id=org_id,
+        user_id=user_id,
+        request_id=request_id,
         metadata=metadata,
     )

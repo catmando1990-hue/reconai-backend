@@ -24,6 +24,8 @@ from app.services.s3_exports import (
     run_expiration_job,
     get_expired_exports,
     get_cloudfront_status,
+    get_export_provenance,
+    get_export_by_id,
     DEFAULT_RETENTION_DAYS,
     STATUS_READY,
     STATUS_EXPIRED,
@@ -271,6 +273,72 @@ async def get_cloudfront_configuration_status(
         logger.error(f"Failed to get CloudFront status: {e}")
         return error(
             message="Failed to get CloudFront status",
+            request_id=request_id,
+            status_code=500,
+            details={"exception": str(e)[:200]},
+        )
+
+
+@router.get("/{export_id}/provenance")
+async def get_export_provenance_chain(
+    export_id: str,
+    ctx: AuthContext = Depends(get_current_context),
+):
+    """
+    Get the provenance chain for an export.
+
+    GET /internal/exports/{export_id}/provenance
+
+    Returns the list of evidence records linked to this export,
+    enabling traceability from export -> evidence -> source data.
+
+    TRACEABILITY:
+    - Links exports to their source evidence records
+    - Evidence types: evidence_refs, audit_events, etc.
+    - Immutable: links are INSERT-only, never modified
+
+    Response:
+    - export: The export record
+    - evidence_links: List of evidence links
+    - total_evidence: Count of linked evidence records
+    """
+    request_id = generate_request_id()
+
+    try:
+        _assert_admin(ctx)
+
+        # Get the export record
+        export = get_export_by_id(export_id)
+        if not export:
+            return error(
+                message=f"Export not found: {export_id}",
+                request_id=request_id,
+                status_code=404,
+            )
+
+        # Get the provenance chain
+        provenance = get_export_provenance(export_id)
+
+        return ok(
+            data={
+                "export": export.to_dict(),
+                "evidence_links": [link.to_dict() for link in provenance],
+                "total_evidence": len(provenance),
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+            request_id=request_id,
+        )
+
+    except HTTPException as e:
+        return error(
+            message=str(e.detail) if isinstance(e.detail, str) else "Forbidden",
+            request_id=request_id,
+            status_code=e.status_code,
+        )
+    except Exception as e:
+        logger.error(f"Failed to get export provenance: {e}")
+        return error(
+            message="Failed to get export provenance",
             request_id=request_id,
             status_code=500,
             details={"exception": str(e)[:200]},

@@ -825,6 +825,33 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_s3_exports_user ON s3_exports(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_s3_exports_status ON s3_exports(status)")
 
+        # =================================================================
+        # EXPORT EVIDENCE LINKS (Provenance Chain)
+        # =================================================================
+        # Links exports to their source evidence records
+        # INSERT-ONLY: No updates or deletes permitted
+        # Enables traceability: export -> evidence -> source data
+        #
+        # IMMUTABILITY GUARANTEE:
+        # - ON DELETE NO ACTION: Provenance records MUST outlive exports
+        # - Even if artifact is deleted/expired, the chain remains
+        # - Fields (evidence_type, linked_by) are informational only
+        # - Linkage is immutable and authoritative
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS export_evidence_links (
+                id TEXT PRIMARY KEY,
+                export_id TEXT NOT NULL,
+                evidence_id TEXT NOT NULL,
+                evidence_type TEXT NOT NULL,
+                linked_at TEXT NOT NULL DEFAULT (datetime('now')),
+                linked_by TEXT NOT NULL,
+                FOREIGN KEY (export_id) REFERENCES s3_exports(id) ON DELETE NO ACTION
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_ev_links_export ON export_evidence_links(export_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_ev_links_evidence ON export_evidence_links(evidence_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_ev_links_type ON export_evidence_links(evidence_type)")
+
         conn.commit()
         print("Multi-tenancy database tables created")
 

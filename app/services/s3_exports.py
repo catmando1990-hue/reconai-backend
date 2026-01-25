@@ -904,3 +904,226 @@ def run_expiration_job(limit: int = 100, dry_run: bool = False) -> dict:
         "failed": failed,
         "results": results,
     }
+
+
+# =============================================================================
+# EVIDENCE CHAIN (PROVENANCE) OPERATIONS
+# =============================================================================
+
+class ExportEvidenceLink:
+    """Represents a link between an export and its source evidence."""
+
+    def __init__(
+        self,
+        id: str,
+        export_id: str,
+        evidence_id: str,
+        evidence_type: str,
+        linked_at: str,
+        linked_by: str,
+    ):
+        self.id = id
+        self.export_id = export_id
+        self.evidence_id = evidence_id
+        self.evidence_type = evidence_type
+        self.linked_at = linked_at
+        self.linked_by = linked_by
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "export_id": self.export_id,
+            "evidence_id": self.evidence_id,
+            "evidence_type": self.evidence_type,
+            "linked_at": self.linked_at,
+            "linked_by": self.linked_by,
+        }
+
+
+def link_export_to_evidence(
+    export_id: str,
+    evidence_ids: list[str],
+    evidence_type: str,
+    user_id: str,
+    request_id: Optional[str] = None,
+) -> list[ExportEvidenceLink]:
+    """
+    Link an export to one or more evidence records.
+
+    INSERT-ONLY: This function only inserts new links, never updates or deletes.
+
+    Args:
+        export_id: The export ID
+        evidence_ids: List of evidence IDs to link
+        evidence_type: Type of evidence (e.g., "evidence_refs", "audit_events")
+        user_id: User ID who is creating the links
+        request_id: Request ID for audit tracing (optional)
+
+    Returns:
+        List of created ExportEvidenceLink records
+
+    Raises:
+        ValueError: If export_id or evidence_ids is empty
+    """
+    if not export_id:
+        raise ValueError("export_id is required")
+    if not evidence_ids:
+        raise ValueError("evidence_ids list cannot be empty")
+
+    links = []
+    now = datetime.utcnow().isoformat()
+
+    with sqlite3.connect(DB_PATH) as conn:
+        for evidence_id in evidence_ids:
+            link_id = f"evl_{uuid4().hex[:16]}"
+
+            conn.execute(
+                """
+                INSERT INTO export_evidence_links (id, export_id, evidence_id, evidence_type, linked_at, linked_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (link_id, export_id, evidence_id, evidence_type, now, user_id),
+            )
+
+            links.append(ExportEvidenceLink(
+                id=link_id,
+                export_id=export_id,
+                evidence_id=evidence_id,
+                evidence_type=evidence_type,
+                linked_at=now,
+                linked_by=user_id,
+            ))
+
+        conn.commit()
+
+    logger.info(f"Linked export {export_id} to {len(links)} evidence records (type={evidence_type})")
+
+    # Emit audit event for provenance linking (non-blocking)
+    try:
+        audit = _get_audit_module()
+        audit.log_export_provenance_linked(
+            export_id=export_id,
+            evidence_ids=evidence_ids,
+            evidence_type=evidence_type,
+            user_id=user_id,
+            request_id=request_id,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log export_provenance_linked audit event: {e}")
+
+    return links
+
+
+def get_export_provenance(export_id: str) -> list[ExportEvidenceLink]:
+    """
+    Get all evidence links for an export.
+
+    Args:
+        export_id: The export ID
+
+    Returns:
+        List of ExportEvidenceLink records
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            """
+            SELECT id, export_id, evidence_id, evidence_type, linked_at, linked_by
+            FROM export_evidence_links
+            WHERE export_id = ?
+            ORDER BY linked_at ASC
+            """,
+            (export_id,),
+        )
+        rows = cursor.fetchall()
+
+    return [ExportEvidenceLink(**dict(row)) for row in rows]
+
+
+def get_exports_for_evidence(evidence_id: str) -> list[ExportEvidenceLink]:
+    """
+    Get all exports linked to a specific evidence record.
+
+    Useful for tracing which exports contain a specific piece of evidence.
+
+    Args:
+        evidence_id: The evidence ID
+
+    Returns:
+        List of ExportEvidenceLink records
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            """
+            SELECT id, export_id, evidence_id, evidence_type, linked_at, linked_by
+            FROM export_evidence_links
+            WHERE evidence_id = ?
+            ORDER BY linked_at ASC
+            """,
+            (evidence_id,),
+        )
+        rows = cursor.fetchall()
+
+    return [ExportEvidenceLink(**dict(row)) for row in rows]
+
+
+def create_and_upload_export_with_provenance(
+    data: bytes,
+    org_id: str,
+    user_id: str,
+    filename: str,
+    evidence_ids: list[str],
+    evidence_type: str,
+    content_type: str = "application/octet-stream",
+    request_id: Optional[str] = None,
+    retention_days: Optional[int] = None,
+) -> Tuple[S3ExportRecord, list[ExportEvidenceLink]]:
+    """
+    Create a complete export with provenance: upload to S3, create DB record, link evidence, and emit audit events.
+
+    This is the recommended entry point for backend export generation flows
+    that need to track provenance to source evidence.
+
+    Args:
+        data: File content as bytes
+        org_id: Organization ID
+        user_id: User ID who created the export
+        filename: Original filename
+        evidence_ids: List of evidence IDs that this export is based on
+        evidence_type: Type of evidence (e.g., "evidence_refs", "audit_events")
+        content_type: MIME type of the file
+        request_id: Request ID for audit tracing (optional)
+        retention_days: Custom retention period (optional, defaults to DEFAULT_RETENTION_DAYS)
+
+    Returns:
+        Tuple of (S3ExportRecord, list of ExportEvidenceLink)
+
+    Raises:
+        ClientError: If S3 upload fails
+        NoCredentialsError: If AWS credentials are not configured
+        ValueError: If evidence_ids is empty
+    """
+    # Create and upload the export
+    export = create_and_upload_export(
+        data=data,
+        org_id=org_id,
+        user_id=user_id,
+        filename=filename,
+        content_type=content_type,
+        request_id=request_id,
+        retention_days=retention_days,
+    )
+
+    # Link to evidence
+    links = link_export_to_evidence(
+        export_id=export.id,
+        evidence_ids=evidence_ids,
+        evidence_type=evidence_type,
+        user_id=user_id,
+        request_id=request_id,
+    )
+
+    logger.info(f"Export created with provenance: id={export.id}, evidence_count={len(links)}")
+
+    return export, links
