@@ -97,6 +97,7 @@ from app.routers.signals_prioritization_api import router as signals_prioritizat
 from app.routers.entitlements_api import router as entitlements_router
 from app.routers.admin_actions_api import router as admin_actions_router
 from app.routers.admin_diagnostics_api import router as admin_diagnostics_router
+from app.routers.internal_exports_api import router as internal_exports_router
 from app.routers.billing_api import router as billing_api_router
 from app.routers.billing_status_api import router as billing_status_api_router
 from app.routers.billing_sync_api import router as billing_sync_api_router
@@ -378,6 +379,8 @@ app.include_router(intelligence_status_router)
 app.include_router(admin_actions_router)
 # PHASE 5: Admin Diagnostics with JSON Envelope Hardening
 app.include_router(admin_diagnostics_router)
+# STEP 5: S3 Export Lifecycle Management (Internal Admin)
+app.include_router(internal_exports_router)
 # STEP 4B — Evidence Retention & Manual Exports
 app.include_router(intelligence_export_router)
 # STEP 4C — Signals Prioritization (Deterministic Ranking)

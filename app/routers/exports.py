@@ -23,6 +23,7 @@ from app.services.s3_exports import (
     get_export_for_user,
     list_user_exports,
     DEFAULT_URL_EXPIRATION_SECONDS,
+    STATUS_READY,
 )
 
 logger = logging.getLogger(__name__)
@@ -281,8 +282,8 @@ async def get_export_download_url(
             detail="Export not found",
         )
 
-    # Check if export is completed
-    if export_record.status != "completed":
+    # Check if export is ready for download
+    if export_record.status != STATUS_READY:
         raise HTTPException(
             status_code=400,
             detail=f"Export is not ready for download. Status: {export_record.status}",

@@ -43,6 +43,15 @@ S3_EXPORTS_BUCKET = os.getenv("S3_EXPORTS_BUCKET", "reconai-prod-private-exports
 # Default URL expiration in seconds
 DEFAULT_URL_EXPIRATION_SECONDS = 300
 
+# Default retention period in days (exports expire after this time)
+DEFAULT_RETENTION_DAYS = 30
+
+# Export status values
+STATUS_PENDING = "pending"
+STATUS_READY = "ready"
+STATUS_EXPIRED = "expired"
+STATUS_FAILED = "failed"
+
 
 # =============================================================================
 # S3 CLIENT INITIALIZATION
@@ -157,24 +166,35 @@ def delete_export(key: str) -> bool:
     """
     Delete an export from S3.
 
+    Handles missing objects gracefully (idempotent).
+
     Args:
         key: The S3 object key
 
     Returns:
-        True if deleted successfully
+        True if deleted or already missing
 
-    Raises:
-        ClientError: If S3 operation fails
+    Note:
+        S3 DeleteObject is idempotent - deleting a non-existent object
+        does not raise an error.
     """
-    s3 = _get_s3_client()
+    try:
+        s3 = _get_s3_client()
 
-    s3.delete_object(
-        Bucket=S3_EXPORTS_BUCKET,
-        Key=key,
-    )
+        s3.delete_object(
+            Bucket=S3_EXPORTS_BUCKET,
+            Key=key,
+        )
 
-    logger.info(f"Deleted export from S3: key={key}")
-    return True
+        logger.info(f"Deleted export from S3: key={key}")
+        return True
+    except ClientError as e:
+        # Log but don't fail if object doesn't exist
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code == "NoSuchKey":
+            logger.warning(f"S3 object already missing: key={key}")
+            return True
+        raise
 
 
 # =============================================================================
@@ -448,3 +468,160 @@ def delete_export_record(export_id: str) -> bool:
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+# =============================================================================
+# LIFECYCLE & RETENTION ENFORCEMENT
+# =============================================================================
+
+def get_expired_exports(limit: int = 100) -> list[S3ExportRecord]:
+    """
+    Get exports that are ready but have passed their expiration time.
+
+    Uses expires_at if set, otherwise calculates from created_at + retention period.
+
+    Args:
+        limit: Maximum number of records to return
+
+    Returns:
+        List of expired S3ExportRecord
+    """
+    now = datetime.utcnow().isoformat()
+    default_expiry_threshold = (datetime.utcnow() - timedelta(days=DEFAULT_RETENTION_DAYS)).isoformat()
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            """
+            SELECT id, org_id, user_id, s3_key, filename, file_type, size_bytes, status, created_at, completed_at, expires_at
+            FROM s3_exports
+            WHERE status = ?
+            AND (
+                (expires_at IS NOT NULL AND expires_at <= ?)
+                OR (expires_at IS NULL AND created_at <= ?)
+            )
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (STATUS_READY, now, default_expiry_threshold, limit),
+        )
+        rows = cursor.fetchall()
+
+    return [S3ExportRecord(**dict(row)) for row in rows]
+
+
+def expire_export(export_id: str) -> dict:
+    """
+    Expire a single export: delete from S3 and update status.
+
+    Args:
+        export_id: The export ID to expire
+
+    Returns:
+        dict with result details
+    """
+    export = get_export_by_id(export_id)
+    if not export:
+        return {"export_id": export_id, "success": False, "error": "Export not found"}
+
+    if export.status != STATUS_READY:
+        return {"export_id": export_id, "success": False, "error": f"Export not in ready state: {export.status}"}
+
+    # Delete from S3 (handles missing objects gracefully)
+    s3_deleted = False
+    s3_error = None
+    try:
+        s3_deleted = delete_export(export.s3_key)
+    except Exception as e:
+        s3_error = str(e)
+        logger.error(f"Failed to delete S3 object for export {export_id}: {e}")
+
+    # Update status to expired regardless of S3 result
+    # (if S3 delete fails, we still mark as expired to prevent repeated attempts)
+    update_export_status(export_id, STATUS_EXPIRED)
+
+    logger.info(f"Export expired: id={export_id}, s3_key={export.s3_key}, s3_deleted={s3_deleted}")
+
+    return {
+        "export_id": export_id,
+        "success": True,
+        "s3_key": export.s3_key,
+        "s3_deleted": s3_deleted,
+        "s3_error": s3_error,
+    }
+
+
+def run_expiration_job(limit: int = 100, dry_run: bool = False) -> dict:
+    """
+    Run the export expiration job.
+
+    This is the main entry point for lifecycle enforcement.
+    Call this from a cron job, management command, or admin endpoint.
+
+    EXECUTION MODEL:
+    - Manual or scheduled execution only
+    - NO polling loops
+    - NO background timers
+    - Idempotent and safe to run multiple times
+
+    Args:
+        limit: Maximum number of exports to process in one run
+        dry_run: If True, only report what would be expired without making changes
+
+    Returns:
+        dict with job results
+    """
+    started_at = datetime.utcnow().isoformat()
+    logger.info(f"Starting export expiration job: limit={limit}, dry_run={dry_run}")
+
+    # Get expired exports
+    expired_exports = get_expired_exports(limit=limit)
+
+    if dry_run:
+        logger.info(f"Dry run: would expire {len(expired_exports)} exports")
+        return {
+            "started_at": started_at,
+            "completed_at": datetime.utcnow().isoformat(),
+            "dry_run": True,
+            "total_found": len(expired_exports),
+            "would_expire": [e.to_dict() for e in expired_exports],
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+        }
+
+    # Process each export
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for export in expired_exports:
+        try:
+            result = expire_export(export.id)
+            results.append(result)
+            if result["success"]:
+                succeeded += 1
+            else:
+                failed += 1
+        except Exception as e:
+            logger.error(f"Unexpected error expiring export {export.id}: {e}")
+            results.append({
+                "export_id": export.id,
+                "success": False,
+                "error": str(e),
+            })
+            failed += 1
+
+    completed_at = datetime.utcnow().isoformat()
+    logger.info(f"Export expiration job completed: processed={len(expired_exports)}, succeeded={succeeded}, failed={failed}")
+
+    return {
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "dry_run": False,
+        "total_found": len(expired_exports),
+        "processed": len(results),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
+    }
