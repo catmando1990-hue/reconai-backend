@@ -1056,6 +1056,112 @@ class PlaidServiceV2:
             )
 
     # =========================================================================
+    # REMOVE ITEM
+    # =========================================================================
+
+    def remove_item(
+        self,
+        organization_id: str,
+        item_id: str,
+        user_id: str,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Remove a Plaid item (unlink bank connection).
+        
+        This method:
+        1. Revokes the access token with Plaid (best-effort)
+        2. Deletes the item from the local database
+        
+        Args:
+            organization_id: The organization owning the item
+            item_id: The Plaid item ID to remove
+            user_id: The user performing the removal (for audit)
+            request_id: Request ID for tracing
+            
+        Returns:
+            Canonical lifecycle response
+        """
+        request_id = request_id or self._generate_request_id()
+        
+        try:
+            with self._get_conn() as conn:
+                # Verify item exists and belongs to organization
+                item = conn.execute(
+                    """
+                    SELECT id, access_token_encrypted, institution_name
+                    FROM plaid_items
+                    WHERE item_id = ? AND organization_id = ?
+                    """,
+                    (item_id, organization_id),
+                ).fetchone()
+                
+                if not item:
+                    return build_lifecycle_response(
+                        success=False,
+                        lifecycle=PlaidLifecycle.ERROR,
+                        user_message="Bank connection not found.",
+                        request_id=request_id,
+                    )
+                
+                institution_name = item["institution_name"] or "Bank"
+                
+                # Best-effort: Revoke access token with Plaid
+                plaid_revoke_success = False
+                try:
+                    access_token = self.encryption.decrypt(item["access_token_encrypted"])
+                    from plaid.model.item_remove_request import ItemRemoveRequest
+                    remove_request = ItemRemoveRequest(access_token=access_token)
+                    self.plaid_client.item_remove(remove_request)
+                    plaid_revoke_success = True
+                    logger.info(f"Plaid access token revoked: item={item_id}")
+                except ApiException as e:
+                    # Log but don't fail - we still want to remove locally
+                    logger.warning(f"Failed to revoke Plaid token (continuing): item={item_id} error={e}")
+                except Exception as e:
+                    logger.warning(f"Failed to revoke Plaid token (continuing): item={item_id} error={e}")
+                
+                # Delete from local database
+                conn.execute(
+                    "DELETE FROM plaid_items WHERE item_id = ? AND organization_id = ?",
+                    (item_id, organization_id),
+                )
+                
+                # Also clean up related webhook events
+                conn.execute(
+                    "DELETE FROM plaid_webhook_events WHERE item_id = ?",
+                    (item_id,),
+                )
+                
+                conn.commit()
+            
+            logger.info(
+                f"Plaid item removed: org={organization_id} item={item_id} "
+                f"institution={institution_name} plaid_revoked={plaid_revoke_success}"
+            )
+            
+            return build_lifecycle_response(
+                success=True,
+                lifecycle=PlaidLifecycle.READY,  # Operation complete
+                data={
+                    "item_id": item_id,
+                    "institution_name": institution_name,
+                    "plaid_revoked": plaid_revoke_success,
+                },
+                user_message=f"{institution_name} has been disconnected.",
+                request_id=request_id,
+            )
+            
+        except Exception as e:
+            logger.exception(f"Error removing item: {e}")
+            return build_lifecycle_response(
+                success=False,
+                lifecycle=PlaidLifecycle.ERROR,
+                user_message="Unable to remove bank connection. Please try again.",
+                request_id=request_id,
+            )
+
+    # =========================================================================
     # INTERNAL HELPERS
     # =========================================================================
 
