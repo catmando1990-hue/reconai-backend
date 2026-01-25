@@ -655,6 +655,7 @@ def init_db() -> None:
 
         # Plaid Items (connected bank accounts)
         # Access tokens are encrypted at rest using AES-256-GCM
+        # lifecycle: created|pending|processing|ready|login_required|error
         conn.execute("""
             CREATE TABLE IF NOT EXISTS plaid_items (
                 id TEXT PRIMARY KEY,
@@ -665,6 +666,7 @@ def init_db() -> None:
                 institution_id TEXT,
                 institution_name TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
+                lifecycle TEXT DEFAULT 'created',
                 sync_cursor TEXT,
                 last_synced_at TEXT,
                 error_code TEXT,
@@ -678,9 +680,17 @@ def init_db() -> None:
                 FOREIGN KEY (created_by) REFERENCES users(id)
             )
         """)
+        
+        # Migration: Add lifecycle column if missing (for existing databases)
+        try:
+            conn.execute("ALTER TABLE plaid_items ADD COLUMN lifecycle TEXT DEFAULT 'created'")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
         conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_items_org ON plaid_items(organization_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_items_item_id ON plaid_items(item_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_items_status ON plaid_items(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_plaid_items_lifecycle ON plaid_items(lifecycle)")
 
         # Plaid Audit Log (immutable - append only)
         # Records all sensitive Plaid operations for compliance

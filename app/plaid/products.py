@@ -12,19 +12,16 @@ PRODUCT CATEGORIES
 1. CORE PRODUCTS (always requested)
    - transactions: Historical and real-time transaction data
    - auth: Account and routing numbers
-   - balance: Current balance information
+   - balance: Current balance information (implicit with transactions)
 
 2. EXTENDED PRODUCTS (requested for full financial picture)
    - identity: Account holder information
-   - income: Income verification
    - assets: Asset reports
    - investments: Investment account data
    - liabilities: Loan and credit data
 
 3. OPTIONAL PRODUCTS (requested as optional_products)
-   - transactions_refresh: Real-time transaction updates
-   - investments_refresh: Real-time investment updates
-   - recurring_transactions: Recurring transaction detection
+   - income: Income verification
 
 ============================================================================
 """
@@ -43,6 +40,8 @@ from plaid.model.country_code import CountryCode
 # =============================================================================
 
 # Core products - always requested
+# Note: balance is implicit when transactions is requested, but we include it
+# explicitly to ensure balance data is always available
 CORE_PRODUCTS: List[Products] = [
     Products("transactions"),
     Products("auth"),
@@ -57,11 +56,13 @@ EXTENDED_PRODUCTS: List[Products] = [
 ]
 
 # Optional products - requested via optional_products parameter
+# These are products that may not be supported by all institutions
 OPTIONAL_PRODUCTS: List[Products] = [
     Products("income"),
 ]
 
 # Additional products via additional_consented_products
+# Reserved for future use
 ADDITIONAL_CONSENTED_PRODUCTS: List[Products] = []
 
 
@@ -114,14 +115,14 @@ def get_webhook_url() -> Optional[str]:
     Get the configured webhook URL.
     
     Environment variables checked (in order):
-    1. PLAID_WEBHOOK_URL
-    2. PLAID_WEBHOOK_BASE_URL + /api/plaid/webhook
-    3. API_BASE_URL + /api/plaid/webhook
+    1. PLAID_WEBHOOK_URL - Direct webhook URL
+    2. PLAID_WEBHOOK_BASE_URL + /api/plaid/v3/webhook
+    3. API_BASE_URL + /api/plaid/v3/webhook
     
     Returns:
         Webhook URL or None if not configured
     """
-    # Direct webhook URL
+    # Direct webhook URL (highest priority)
     webhook_url = os.getenv("PLAID_WEBHOOK_URL")
     if webhook_url:
         return webhook_url
@@ -129,7 +130,7 @@ def get_webhook_url() -> Optional[str]:
     # Base URL + path
     base_url = os.getenv("PLAID_WEBHOOK_BASE_URL") or os.getenv("API_BASE_URL")
     if base_url:
-        return f"{base_url.rstrip('/')}/api/plaid/webhook"
+        return f"{base_url.rstrip('/')}/api/plaid/v3/webhook"
     
     return None
 
@@ -164,6 +165,7 @@ def get_link_token_options() -> dict:
 # PRODUCT READINESS CHECK
 # =============================================================================
 
+# Products that require async processing and may not be immediately available
 ASYNC_PRODUCTS = frozenset([
     "assets",
     "income",
@@ -187,6 +189,7 @@ def is_async_product(product: str) -> bool:
     return product.lower() in ASYNC_PRODUCTS
 
 
+# Products available immediately after token exchange
 IMMEDIATELY_AVAILABLE_PRODUCTS = frozenset([
     "transactions",
     "auth",
@@ -208,3 +211,24 @@ def is_immediately_available(product: str) -> bool:
         True if product data can be fetched immediately
     """
     return product.lower() in IMMEDIATELY_AVAILABLE_PRODUCTS
+
+
+# =============================================================================
+# PRODUCT DESCRIPTIONS (for UI display)
+# =============================================================================
+
+PRODUCT_DESCRIPTIONS = {
+    "transactions": "Access to transaction history and real-time updates",
+    "auth": "Account and routing numbers for ACH transfers",
+    "balance": "Current account balance information",
+    "identity": "Account holder name, address, and contact information",
+    "assets": "Comprehensive asset reports for lending decisions",
+    "investments": "Investment holdings and transaction history",
+    "liabilities": "Credit cards, loans, and mortgage information",
+    "income": "Income verification and employment data",
+}
+
+
+def get_product_description(product: str) -> str:
+    """Get a user-friendly description for a product."""
+    return PRODUCT_DESCRIPTIONS.get(product.lower(), f"Access to {product} data")

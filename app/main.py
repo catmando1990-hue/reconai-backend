@@ -78,6 +78,8 @@ from app.routers.governance import router as governance_router
 from app.routers.plaid_hardening import router as plaid_hardening_router
 # Production Plaid API (auth-protected, org-scoped, encrypted tokens)
 from app.routers.plaid_v2 import router as plaid_v2_router
+# Plaid v3 API (lifecycle-aware, canonical responses, full product support)
+from app.routers.plaid_v3 import router as plaid_v3_router
 from app.routers.transaction_overrides import router as transaction_overrides_router
 from app.routers.audit_api import router as audit_api_router
 from app.routers.policy_api import router as policy_api_router
@@ -348,6 +350,8 @@ app.include_router(governance_router)
 app.include_router(plaid_hardening_router)
 # Production Plaid API (auth-protected, org-scoped, encrypted tokens, cursor-based sync)
 app.include_router(plaid_v2_router)
+# Plaid v3 API (lifecycle-aware, canonical responses, full product support)
+app.include_router(plaid_v3_router)
 # BUILD 4 — Controlled Write Enablement
 app.include_router(transaction_overrides_router)
 # BUILD 5 — Audit Log + Compliance Surface (Read-Only)
