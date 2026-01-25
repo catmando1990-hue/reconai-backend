@@ -4,17 +4,28 @@ from __future__ import annotations
 import csv
 import io
 import re
+import logging
 from datetime import date, datetime
 from typing import Iterable, Iterator, List, Optional
 from urllib.parse import quote
 
 # fastapi
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 # local
 from app.models import TransactionsRequest, TransactionsResponse
 from app.reconai_core.analysis import analyze_transactions as core_analyze_transactions
+from app.auth_context import get_current_context, AuthContext
+from app.services.s3_exports import (
+    generate_download_url,
+    get_export_for_user,
+    list_user_exports,
+    DEFAULT_URL_EXPIRATION_SECONDS,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/exports", tags=["exports"])
 
@@ -204,3 +215,124 @@ def export_json_from_input(
 ):
     """Analyze raw input and return JSON."""
     return core_analyze_transactions(payload)
+
+
+# ----------------------------
+# S3 Export Models
+# ----------------------------
+
+class S3ExportDownloadResponse(BaseModel):
+    """Response model for signed download URL."""
+    download_url: str
+    expires_in_seconds: int = DEFAULT_URL_EXPIRATION_SECONDS
+
+
+class S3ExportListResponse(BaseModel):
+    """Response model for listing exports."""
+    exports: List[dict]
+    total: int
+
+
+# ----------------------------
+# S3 Export Endpoints
+# ----------------------------
+# NOTE: Upload functionality (upload_export) is internal-only.
+# It is called by backend export generation flows, not exposed as public API.
+# This follows ReconAI laws: Manual-only intelligence, backend-owned artifacts.
+
+
+@router.get("/{export_id}/download", response_model=S3ExportDownloadResponse)
+async def get_export_download_url(
+    export_id: str,
+    expires_seconds: int = Query(
+        default=DEFAULT_URL_EXPIRATION_SECONDS,
+        ge=60,
+        le=3600,
+        description="URL expiration time in seconds (60-3600)",
+    ),
+    ctx: AuthContext = Depends(get_current_context),
+):
+    """
+    Get a signed download URL for an export.
+
+    The signed URL provides time-limited access to the private S3 object.
+    Default expiration is 300 seconds (5 minutes).
+
+    Requirements:
+    - User must be authenticated
+    - User must own the export (same user_id and org_id)
+
+    Returns:
+    - download_url: Presigned S3 URL for download
+    - expires_in_seconds: URL expiration time
+    """
+    from botocore.exceptions import ClientError, NoCredentialsError
+
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+
+    # Look up export and validate ownership
+    export_record = get_export_for_user(export_id, user_id, org_id)
+
+    if not export_record:
+        logger.warning(f"Export not found or access denied: export_id={export_id}, user_id={user_id}")
+        raise HTTPException(
+            status_code=404,
+            detail="Export not found",
+        )
+
+    # Check if export is completed
+    if export_record.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Export is not ready for download. Status: {export_record.status}",
+        )
+
+    try:
+        # Generate presigned URL
+        download_url = generate_download_url(
+            key=export_record.s3_key,
+            expires_seconds=expires_seconds,
+        )
+
+        logger.info(f"Generated download URL: export_id={export_id}, expires_in={expires_seconds}s")
+
+        return S3ExportDownloadResponse(
+            download_url=download_url,
+            expires_in_seconds=expires_seconds,
+        )
+
+    except NoCredentialsError:
+        logger.error("Failed to generate download URL: AWS credentials not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="S3 storage not configured. Contact administrator.",
+        )
+    except ClientError as e:
+        logger.error(f"Failed to generate download URL: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate download URL. Please try again.",
+        )
+
+
+@router.get("/s3/list", response_model=S3ExportListResponse)
+async def list_s3_exports(
+    status: Optional[str] = Query(None, description="Filter by status (pending, completed, failed)"),
+    limit: int = Query(50, ge=1, le=100, description="Maximum number of exports to return"),
+    ctx: AuthContext = Depends(get_current_context),
+):
+    """
+    List the authenticated user's S3 exports.
+
+    Returns exports for the current user within their organization.
+    """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+
+    exports = list_user_exports(user_id, org_id, status=status, limit=limit)
+
+    return S3ExportListResponse(
+        exports=[e.to_dict() for e in exports],
+        total=len(exports),
+    )

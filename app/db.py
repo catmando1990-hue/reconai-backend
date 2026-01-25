@@ -799,6 +799,32 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_merchant ON core_transactions(merchant_normalized)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_item ON core_transactions(plaid_item_id)")
 
+        # =================================================================
+        # S3 EXPORTS (Secure Export Downloads)
+        # =================================================================
+        # Tracks S3-based exports with signed URL access
+        # S3 objects remain private; access is brokered via backend
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS s3_exports (
+                id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                s3_key TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                size_bytes INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT DEFAULT (datetime('now')),
+                completed_at TEXT,
+                expires_at TEXT,
+                FOREIGN KEY (org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_s3_exports_org ON s3_exports(org_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_s3_exports_user ON s3_exports(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_s3_exports_status ON s3_exports(status)")
+
         conn.commit()
         print("Multi-tenancy database tables created")
 
