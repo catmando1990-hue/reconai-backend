@@ -51,6 +51,11 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 S3_EXPORTS_BUCKET = os.getenv("S3_EXPORTS_BUCKET", "reconai-prod-private-exports")
 
+# CloudFront configuration (optional - falls back to S3 presigned URLs if not set)
+CLOUDFRONT_DISTRIBUTION_URL = os.getenv("CLOUDFRONT_DISTRIBUTION_URL")  # e.g., https://d1234example.cloudfront.net
+CLOUDFRONT_KEY_PAIR_ID = os.getenv("CLOUDFRONT_KEY_PAIR_ID")  # e.g., K2EXAMPLE123ABC
+CLOUDFRONT_PRIVATE_KEY = os.getenv("CLOUDFRONT_PRIVATE_KEY")  # Base64-encoded RSA private key
+
 # Default URL expiration in seconds
 DEFAULT_URL_EXPIRATION_SECONDS = 300
 
@@ -87,6 +92,147 @@ def _get_s3_client():
 
 
 # =============================================================================
+# CLOUDFRONT SIGNED URL GENERATION
+# =============================================================================
+
+def _is_cloudfront_configured() -> bool:
+    """Check if CloudFront is configured for signed URLs."""
+    return bool(
+        CLOUDFRONT_DISTRIBUTION_URL
+        and CLOUDFRONT_KEY_PAIR_ID
+        and CLOUDFRONT_PRIVATE_KEY
+    )
+
+
+def _get_cloudfront_private_key() -> bytes:
+    """
+    Decode and return the CloudFront private key.
+
+    The key is expected to be base64-encoded in the environment variable.
+
+    Returns:
+        PEM-encoded private key as bytes
+
+    Raises:
+        ValueError: If private key is not configured or invalid
+    """
+    import base64
+
+    if not CLOUDFRONT_PRIVATE_KEY:
+        raise ValueError("CLOUDFRONT_PRIVATE_KEY not configured")
+
+    try:
+        # Decode base64-encoded key
+        key_bytes = base64.b64decode(CLOUDFRONT_PRIVATE_KEY)
+        return key_bytes
+    except Exception as e:
+        raise ValueError(f"Failed to decode CloudFront private key: {e}") from e
+
+
+def _generate_cloudfront_signed_url(
+    resource_path: str,
+    expires_seconds: int = DEFAULT_URL_EXPIRATION_SECONDS,
+) -> str:
+    """
+    Generate a CloudFront signed URL using canned policy.
+
+    Args:
+        resource_path: The path to the resource (e.g., /exports/org_123/file.csv)
+        expires_seconds: URL expiration time in seconds
+
+    Returns:
+        Signed CloudFront URL
+
+    Raises:
+        ValueError: If CloudFront is not configured
+        Exception: If signing fails
+    """
+    import base64
+    import json
+    from datetime import datetime, timezone
+
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    if not _is_cloudfront_configured():
+        raise ValueError("CloudFront is not configured")
+
+    # Build the full URL
+    base_url = CLOUDFRONT_DISTRIBUTION_URL.rstrip("/")
+    if not resource_path.startswith("/"):
+        resource_path = f"/{resource_path}"
+    url = f"{base_url}{resource_path}"
+
+    # Calculate expiration timestamp
+    expire_time = int(datetime.now(timezone.utc).timestamp()) + expires_seconds
+
+    # Create canned policy
+    # CloudFront canned policy format
+    policy = {
+        "Statement": [
+            {
+                "Resource": url,
+                "Condition": {
+                    "DateLessThan": {
+                        "AWS:EpochTime": expire_time
+                    }
+                }
+            }
+        ]
+    }
+
+    # Serialize policy (compact JSON, no spaces)
+    policy_json = json.dumps(policy, separators=(",", ":"))
+
+    # Load private key
+    private_key_pem = _get_cloudfront_private_key()
+    private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+
+    # Sign the policy
+    signature = private_key.sign(
+        policy_json.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA1(),  # CloudFront requires SHA1 for signed URLs
+    )
+
+    # Base64 encode and make URL-safe
+    def _url_safe_base64(data: bytes) -> str:
+        """Encode bytes to URL-safe base64 (CloudFront format)."""
+        b64 = base64.b64encode(data).decode("ascii")
+        # CloudFront uses modified base64: + -> -, / -> ~, = -> _
+        return b64.replace("+", "-").replace("/", "~").replace("=", "_")
+
+    policy_b64 = _url_safe_base64(policy_json.encode("utf-8"))
+    signature_b64 = _url_safe_base64(signature)
+
+    # Build signed URL with query parameters
+    signed_url = (
+        f"{url}"
+        f"?Policy={policy_b64}"
+        f"&Signature={signature_b64}"
+        f"&Key-Pair-Id={CLOUDFRONT_KEY_PAIR_ID}"
+    )
+
+    logger.info(f"Generated CloudFront signed URL for path={resource_path}, expires_in={expires_seconds}s")
+    return signed_url
+
+
+def get_cloudfront_status() -> dict:
+    """
+    Get CloudFront configuration status for diagnostics.
+
+    Returns:
+        dict with CloudFront configuration status
+    """
+    return {
+        "configured": _is_cloudfront_configured(),
+        "distribution_url": CLOUDFRONT_DISTRIBUTION_URL[:50] + "..." if CLOUDFRONT_DISTRIBUTION_URL and len(CLOUDFRONT_DISTRIBUTION_URL) > 50 else CLOUDFRONT_DISTRIBUTION_URL,
+        "key_pair_id": CLOUDFRONT_KEY_PAIR_ID,
+        "private_key_present": bool(CLOUDFRONT_PRIVATE_KEY),
+    }
+
+
+# =============================================================================
 # S3 OPERATIONS
 # =============================================================================
 
@@ -94,17 +240,30 @@ def generate_download_url(key: str, expires_seconds: int = DEFAULT_URL_EXPIRATIO
     """
     Generate a presigned download URL for a private S3 object.
 
+    If CloudFront is configured, returns a CloudFront signed URL.
+    Otherwise, falls back to S3 presigned URL (development only).
+
     Args:
         key: The S3 object key (path within bucket)
         expires_seconds: URL expiration time in seconds (default: 300)
 
     Returns:
-        Presigned URL string
+        Presigned URL string (CloudFront or S3)
 
     Raises:
         ClientError: If S3 operation fails
         NoCredentialsError: If AWS credentials are not configured
+        ValueError: If CloudFront signing fails
     """
+    # Use CloudFront if configured (production)
+    if _is_cloudfront_configured():
+        return _generate_cloudfront_signed_url(
+            resource_path=key,
+            expires_seconds=expires_seconds,
+        )
+
+    # Fall back to S3 presigned URL (development only)
+    logger.warning("CloudFront not configured, using S3 presigned URL (dev mode)")
     s3 = _get_s3_client()
 
     url = s3.generate_presigned_url(
@@ -116,7 +275,7 @@ def generate_download_url(key: str, expires_seconds: int = DEFAULT_URL_EXPIRATIO
         ExpiresIn=expires_seconds,
     )
 
-    logger.info(f"Generated presigned URL for key={key}, expires_in={expires_seconds}s")
+    logger.info(f"Generated S3 presigned URL for key={key}, expires_in={expires_seconds}s")
     return url
 
 

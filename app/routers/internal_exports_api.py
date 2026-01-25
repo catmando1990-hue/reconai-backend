@@ -23,6 +23,7 @@ from app.utils.response_envelope import ok, error, generate_request_id
 from app.services.s3_exports import (
     run_expiration_job,
     get_expired_exports,
+    get_cloudfront_status,
     DEFAULT_RETENTION_DAYS,
     STATUS_READY,
     STATUS_EXPIRED,
@@ -220,6 +221,56 @@ async def get_export_stats(
         logger.error(f"Failed to get export stats: {e}")
         return error(
             message="Failed to get export stats",
+            request_id=request_id,
+            status_code=500,
+            details={"exception": str(e)[:200]},
+        )
+
+
+@router.get("/cloudfront/status")
+async def get_cloudfront_configuration_status(
+    ctx: AuthContext = Depends(get_current_context),
+):
+    """
+    Get CloudFront configuration status for diagnostics.
+
+    GET /internal/exports/cloudfront/status
+
+    Returns CloudFront configuration status:
+    - Whether CloudFront is configured
+    - Distribution URL (truncated)
+    - Key pair ID
+    - Whether private key is present
+
+    NOTE: Private key value is never returned.
+    """
+    request_id = generate_request_id()
+
+    try:
+        _assert_admin(ctx)
+
+        status = get_cloudfront_status()
+
+        return ok(
+            data={
+                "cloudfront": status,
+                "mode": "cloudfront" if status["configured"] else "s3_fallback",
+                "note": "CloudFront configured" if status["configured"] else "Using S3 presigned URLs (dev mode)",
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+            request_id=request_id,
+        )
+
+    except HTTPException as e:
+        return error(
+            message=str(e.detail) if isinstance(e.detail, str) else "Forbidden",
+            request_id=request_id,
+            status_code=e.status_code,
+        )
+    except Exception as e:
+        logger.error(f"Failed to get CloudFront status: {e}")
+        return error(
+            message="Failed to get CloudFront status",
             request_id=request_id,
             status_code=500,
             details={"exception": str(e)[:200]},
