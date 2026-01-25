@@ -31,6 +31,17 @@ from app.db import DB_PATH
 
 logger = logging.getLogger(__name__)
 
+# Lazy import for audit logging to avoid circular imports
+_audit_module = None
+
+def _get_audit_module():
+    """Lazy import of export_audit module."""
+    global _audit_module
+    if _audit_module is None:
+        from app.services import export_audit
+        _audit_module = export_audit
+    return _audit_module
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -160,6 +171,103 @@ def upload_export(
     logger.info(f"Uploaded export to S3: key={s3_key}, size={size_bytes} bytes")
 
     return s3_key, size_bytes
+
+
+def create_and_upload_export(
+    data: bytes,
+    org_id: str,
+    user_id: str,
+    filename: str,
+    content_type: str = "application/octet-stream",
+    request_id: Optional[str] = None,
+    retention_days: Optional[int] = None,
+) -> S3ExportRecord:
+    """
+    Create a complete export: upload to S3, create DB record, and emit audit event.
+
+    This is the recommended entry point for backend export generation flows.
+    It handles the full lifecycle including audit logging.
+
+    Args:
+        data: File content as bytes
+        org_id: Organization ID
+        user_id: User ID who created the export
+        filename: Original filename
+        content_type: MIME type of the file
+        request_id: Request ID for audit tracing (optional)
+        retention_days: Custom retention period (optional, defaults to DEFAULT_RETENTION_DAYS)
+
+    Returns:
+        S3ExportRecord with status=ready
+
+    Raises:
+        ClientError: If S3 upload fails
+        NoCredentialsError: If AWS credentials are not configured
+    """
+    from uuid import uuid4
+
+    # Generate export ID
+    export_id = f"exp_{uuid4().hex[:16]}"
+
+    # Calculate expiration
+    retention = retention_days if retention_days is not None else DEFAULT_RETENTION_DAYS
+    expires_at = datetime.utcnow() + timedelta(days=retention)
+
+    # Upload to S3
+    s3_key, size_bytes = upload_export(
+        data=data,
+        org_id=org_id,
+        user_id=user_id,
+        export_id=export_id,
+        filename=filename,
+        content_type=content_type,
+    )
+
+    # Create DB record with status=ready
+    now = datetime.utcnow().isoformat()
+    expires_at_str = expires_at.isoformat()
+
+    import sqlite3
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO s3_exports (id, org_id, user_id, s3_key, filename, file_type, size_bytes, status, created_at, completed_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (export_id, org_id, user_id, s3_key, filename, content_type, size_bytes, STATUS_READY, now, now, expires_at_str),
+        )
+        conn.commit()
+
+    # Emit audit event (non-blocking)
+    try:
+        audit = _get_audit_module()
+        audit.log_export_created(
+            export_id=export_id,
+            org_id=org_id,
+            user_id=user_id,
+            request_id=request_id,
+            filename=filename,
+            file_type=content_type,
+            size_bytes=size_bytes,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log export_created audit event: {e}")
+
+    logger.info(f"Export created: id={export_id}, s3_key={s3_key}, size={size_bytes} bytes")
+
+    return S3ExportRecord(
+        id=export_id,
+        org_id=org_id,
+        user_id=user_id,
+        s3_key=s3_key,
+        filename=filename,
+        file_type=content_type,
+        size_bytes=size_bytes,
+        status=STATUS_READY,
+        created_at=now,
+        completed_at=now,
+        expires_at=expires_at_str,
+    )
 
 
 def delete_export(key: str) -> bool:
@@ -541,6 +649,18 @@ def expire_export(export_id: str) -> dict:
     update_export_status(export_id, STATUS_EXPIRED)
 
     logger.info(f"Export expired: id={export_id}, s3_key={export.s3_key}, s3_deleted={s3_deleted}")
+
+    # Emit audit event (non-blocking)
+    try:
+        audit = _get_audit_module()
+        audit.log_export_expired(
+            export_id=export_id,
+            org_id=export.org_id,
+            s3_deleted=s3_deleted,
+            s3_error=s3_error,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log export_expired audit event: {e}")
 
     return {
         "export_id": export_id,

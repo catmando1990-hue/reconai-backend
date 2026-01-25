@@ -10,7 +10,7 @@ from typing import Iterable, Iterator, List, Optional
 from urllib.parse import quote
 
 # fastapi
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -25,6 +25,7 @@ from app.services.s3_exports import (
     DEFAULT_URL_EXPIRATION_SECONDS,
     STATUS_READY,
 )
+from app.services.export_audit import log_export_downloaded
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,7 @@ class S3ExportListResponse(BaseModel):
 @router.get("/{export_id}/download", response_model=S3ExportDownloadResponse)
 async def get_export_download_url(
     export_id: str,
+    request: Request,
     expires_seconds: int = Query(
         default=DEFAULT_URL_EXPIRATION_SECONDS,
         ge=60,
@@ -297,6 +299,16 @@ async def get_export_download_url(
         )
 
         logger.info(f"Generated download URL: export_id={export_id}, expires_in={expires_seconds}s")
+
+        # Emit audit event (non-blocking)
+        request_id = request.headers.get("x-request-id")
+        log_export_downloaded(
+            export_id=export_id,
+            org_id=org_id,
+            user_id=user_id,
+            request_id=request_id,
+            expires_in_seconds=expires_seconds,
+        )
 
         return S3ExportDownloadResponse(
             download_url=download_url,
