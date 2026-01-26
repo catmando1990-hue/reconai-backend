@@ -318,6 +318,12 @@ def update_organization_subscription(
             # Enable foreign keys and begin transaction
             conn.execute("PRAGMA foreign_keys = ON")
 
+            # P0 Security: Column allowlist to prevent SQL injection
+            allowed_fields = {
+                'tier', 'subscription_status', 'stripe_customer_id',
+                'stripe_subscription_id', 'subscription_end_date'
+            }
+
             updates = {
                 "tier": tier.value,
                 "subscription_status": status.value,
@@ -331,6 +337,9 @@ def update_organization_subscription(
 
             if current_period_end:
                 updates["subscription_end_date"] = current_period_end
+
+            # Filter to allowed fields only (defensive, but fields are hardcoded above)
+            updates = {k: v for k, v in updates.items() if k in allowed_fields}
 
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
             set_clause += ", updated_at = datetime('now')"

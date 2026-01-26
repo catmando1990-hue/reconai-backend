@@ -262,10 +262,19 @@ class InvoicingEngine:
 
     def update_customer(self, customer_id: str, updates: CustomerUpdate) -> Customer:
         """Update customer"""
+        # P0 Security: Column allowlist to prevent SQL injection
+        allowed_fields = {
+            'name', 'email', 'phone', 'billing_address', 'shipping_address',
+            'payment_terms', 'tax_rate', 'notes', 'is_active'
+        }
+
         update_fields = []
         params = []
 
         for field, value in updates.model_dump(exclude_unset=True).items():
+            # Only allow whitelisted fields
+            if field not in allowed_fields:
+                continue
             if value is not None:
                 update_fields.append(f"{field} = ?")
                 params.append(str(value) if isinstance(value, Decimal) else value)
@@ -320,7 +329,7 @@ class InvoicingEngine:
             try:
                 num_part = int(last_number.split('-')[1])
                 return f"INV-{num_part + 1:04d}"
-            except:
+            except (ValueError, IndexError):
                 return "INV-0001"
 
     def create_invoice(self, invoice_data: InvoiceCreate, organization_id: str) -> Invoice:

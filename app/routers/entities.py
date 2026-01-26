@@ -280,8 +280,17 @@ async def update_entity(
                 detail="Entity does not belong to this organization"
             )
 
+        # P0 Security: Column allowlist to prevent SQL injection
+        allowed_fields = {
+            'name', 'legal_name', 'ein', 'entity_type', 'industry',
+            'address_line1', 'city', 'state', 'zip', 'country', 'default_currency'
+        }
+
         # Build updates
         updates = request.model_dump(exclude_none=True)
+        # Filter to allowed fields only
+        updates = {k: v for k, v in updates.items() if k in allowed_fields}
+
         if not updates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

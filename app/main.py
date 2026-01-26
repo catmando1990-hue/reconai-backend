@@ -264,7 +264,9 @@ if os.getenv("ENVIRONMENT") == "production":
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_allowed_origins(),
-    allow_origin_regex=r"^https://.*\.vercel\.app$",
+    # P0 Security: Restricted to reconai-frontend preview deployments only
+    # Matches: reconai-frontend.vercel.app and reconai-frontend-*.vercel.app
+    allow_origin_regex=r"^https://reconai-frontend(-[a-z0-9]+)?\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
     allow_headers=["*"],

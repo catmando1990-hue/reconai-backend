@@ -287,10 +287,19 @@ class BillsEngine:
 
     def update_vendor(self, vendor_id: str, updates: VendorUpdate) -> Vendor:
         """Update vendor"""
+        # P0 Security: Column allowlist to prevent SQL injection
+        allowed_fields = {
+            'name', 'email', 'phone', 'address', 'payment_terms',
+            'ein', 'requires_1099', 'notes', 'is_active'
+        }
+
         update_fields = []
         params = []
 
         for field, value in updates.model_dump(exclude_unset=True).items():
+            # Only allow whitelisted fields
+            if field not in allowed_fields:
+                continue
             if value is not None:
                 if field == 'requires_1099':
                     update_fields.append(f"{field} = ?")

@@ -35,9 +35,15 @@ def govcon_evidence(request: Request) -> Dict[str, Any]:
     org_id = ctx.get("org_id")
 
     items: List[Dict[str, Any]] = []
+    # P0 Security: Table allowlist to prevent SQL injection
+    allowed_tables = {"audit_events", "audit_log", "mvp_audit_events"}
+
     try:
         with get_db_connection() as conn:
             for tbl in ("audit_events", "audit_log", "mvp_audit_events"):
+                # Skip tables not in allowlist (defensive)
+                if tbl not in allowed_tables:
+                    continue
                 if not _table_exists(conn, tbl):
                     continue
 

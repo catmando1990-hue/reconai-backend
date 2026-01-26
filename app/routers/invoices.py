@@ -531,8 +531,17 @@ async def update_invoice(
                     invoice_id
                 ))
 
+            # P0 Security: Column allowlist to prevent SQL injection
+            allowed_fields = {
+                'invoice_date', 'due_date', 'notes', 'terms',
+                'discount_amount', 'shipping_amount', 'status'
+            }
+
             # Update other fields
             updates = request.model_dump(exclude_none=True, exclude={"line_items"})
+            # Filter to allowed fields only
+            updates = {k: v for k, v in updates.items() if k in allowed_fields}
+
             if updates:
                 set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
                 set_clause += ", updated_at = datetime('now')"

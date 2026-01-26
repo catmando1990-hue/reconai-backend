@@ -72,10 +72,15 @@ def govcon_audit_verify(request: Request) -> Dict[str, Any]:
                 "advisory": {"message": "No audit table found."},
             }
 
-        try:
-            cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
-        except Exception:
+        # P0 Security: Validate table name against allowlist
+        allowed_tables = {"audit_events", "audit_log", "mvp_audit_events"}
+        if table not in allowed_tables:
             cols = []
+        else:
+            try:
+                cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            except Exception:
+                cols = []
 
         required = {"prev_hash", "event_hash", "payload"}
         if not required.issubset(set(cols)):
@@ -100,6 +105,7 @@ def govcon_audit_verify(request: Request) -> Dict[str, Any]:
                 "advisory": {"message": f"Table '{table}' does not expose hash chaining columns."},
             }
 
+        # P0 Security: Table name already validated in allowed_tables above
         try:
             rows = conn.execute(
                 f"""

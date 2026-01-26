@@ -44,7 +44,7 @@ def parse_chase_statement(text: str, profile: BankProfile) -> Tuple[List[Transac
                     tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
                 else:
                     tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-            except:
+            except (ValueError, IndexError):
                 continue
             
             # Parse amount
@@ -112,7 +112,7 @@ def parse_bofa_statement(text: str, profile: BankProfile) -> Tuple[List[Transact
                     tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
                 else:
                     tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-            except:
+            except (ValueError, IndexError):
                 continue
             
             amount = _parse_amount(amount_str)
@@ -173,7 +173,7 @@ def parse_wells_fargo_statement(text: str, profile: BankProfile) -> Tuple[List[T
                     tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
                 else:
                     tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-            except:
+            except (ValueError, IndexError):
                 continue
             
             # Amount is either withdrawal (negative) or deposit (positive)
@@ -244,7 +244,7 @@ def parse_capital_one_statement(text: str, profile: BankProfile) -> Tuple[List[T
                     tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
                 else:
                     tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-            except:
+            except (ValueError, IndexError):
                 continue
             
             # Amount is either debit (negative) or credit (positive)
@@ -308,7 +308,7 @@ def parse_usaa_statement(text: str, profile: BankProfile) -> Tuple[List[Transact
                     tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
                 else:
                     tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-            except:
+            except (ValueError, IndexError):
                 continue
             
             amount = _parse_amount(amount_str)
@@ -366,7 +366,7 @@ def parse_discover_statement(text: str, profile: BankProfile) -> Tuple[List[Tran
                     tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
                 else:
                     tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-            except:
+            except (ValueError, IndexError):
                 continue
             
             amount = _parse_amount(amount_str)
@@ -426,7 +426,7 @@ def parse_amex_statement(text: str, profile: BankProfile) -> Tuple[List[Transact
                     tx_date = datetime.strptime(date_str, "%m/%d/%y").date()
                 else:
                     tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
-            except:
+            except (ValueError, IndexError):
                 continue
             
             amount = _parse_amount(amount_str)

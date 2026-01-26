@@ -286,8 +286,18 @@ async def update_customer(
     Requires: edit_transactions permission (or higher)
     """
     try:
+        # P0 Security: Column allowlist to prevent SQL injection
+        allowed_fields = {
+            'name', 'email', 'phone', 'company_name', 'address_line1',
+            'address_line2', 'city', 'state', 'zip', 'country',
+            'tax_id', 'payment_terms', 'notes', 'is_active'
+        }
+
         # Build update query
         updates = request.model_dump(exclude_none=True)
+        # Filter to allowed fields only
+        updates = {k: v for k, v in updates.items() if k in allowed_fields}
+
         if not updates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
