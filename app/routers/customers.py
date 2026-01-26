@@ -5,7 +5,7 @@ Customer Management API
 Handles customer CRUD operations for invoicing
 """
 
-from fastapi import APIRouter, HTTPException, Depends, status, Query
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 import sqlite3
@@ -16,6 +16,11 @@ from ..db import DB_PATH
 from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/customers", tags=["Customers"])
+
+
+def _get_request_id(request: Request) -> str:
+    """Get request_id from middleware or generate fallback."""
+    return getattr(request.state, "request_id", None) or str(uuid.uuid4())
 
 
 # =========================================================================
@@ -132,8 +137,9 @@ async def create_customer(
         )
 
 
-@router.get("/", response_model=List[CustomerResponse])
+@router.get("/", response_model=dict)
 async def list_customers(
+    request: Request,
     org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     active_only: bool = Query(True),
@@ -143,7 +149,9 @@ async def list_customers(
     List all customers for organization
 
     Filter by entity_id if multi-entity is enabled
+    P0 FIX: Returns request_id on all responses.
     """
+    request_id = _get_request_id(request)
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -172,7 +180,7 @@ async def list_customers(
             cursor = conn.execute(query, params)
             rows = cursor.fetchall()
 
-            return [
+            items = [
                 CustomerResponse(
                     id=row["id"],
                     organization_id=row["organization_id"],
@@ -197,14 +205,16 @@ async def list_customers(
                     notes=row["notes"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"]
-                )
+                ).dict()
                 for row in rows
             ]
+
+            return {"items": items, "request_id": request_id}
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail={"error": "customers_list_failed", "message": str(e), "request_id": request_id}
         )
 
 

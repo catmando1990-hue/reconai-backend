@@ -230,6 +230,7 @@ from app.middleware import AuthContextMiddleware, RateLimitMiddleware
 from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.middleware.request_id import RequestIdMiddleware
 from app.middleware.incident_guard import IncidentGuardMiddleware
+from app.middleware.deprecated_guard import DeprecatedGuardMiddleware
 from app.middleware.security_hardening import (
     MutationRateLimitMiddleware,
     AuthGuardMiddleware,
@@ -273,6 +274,10 @@ app.add_middleware(
     expose_headers=[],
     max_age=3600,
 )
+
+# ENDPOINT HYGIENE v1 — Deprecated endpoint guard (returns 410 Gone)
+# Rejects deprecated endpoints early, before auth/business logic
+app.add_middleware(DeprecatedGuardMiddleware)
 
 # Phase-1 Hotfix: RequestIdMiddleware added LAST (executes FIRST)
 # Guarantees x-request-id on ALL responses including errors and OPTIONS

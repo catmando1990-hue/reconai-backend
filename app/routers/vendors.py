@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 import sqlite3
@@ -8,6 +8,11 @@ import uuid
 from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/vendors", tags=["vendors"])
+
+
+def _get_request_id(request: Request) -> str:
+    """Get request_id from middleware or generate fallback."""
+    return getattr(request.state, "request_id", None) or str(uuid.uuid4())
 
 # =========================================================================
 # MODELS
@@ -137,8 +142,9 @@ async def create_vendor(
         )
 
 
-@router.get("/", response_model=List[VendorResponse])
+@router.get("/", response_model=dict)
 async def list_vendors(
+    request: Request,
     org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     is_active: Optional[bool] = None,
@@ -148,7 +154,9 @@ async def list_vendors(
     List all vendors for an organization
 
     Returns vendors with calculated totals (billed, paid, owed).
+    P0 FIX: Returns request_id on all responses.
     """
+    request_id = _get_request_id(request)
     try:
         from app.db import get_db_connection
 
@@ -175,12 +183,15 @@ async def list_vendors(
         columns = [desc[0] for desc in cursor.description]
         vendors = [dict(zip(columns, row)) for row in rows]
 
-        return [VendorResponse(**vendor) for vendor in vendors]
+        return {
+            "items": [VendorResponse(**vendor).dict() for vendor in vendors],
+            "request_id": request_id
+        }
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list vendors: {str(e)}"
+            detail={"error": "vendors_list_failed", "message": str(e), "request_id": request_id}
         )
 
 

@@ -11,6 +11,7 @@ from .security_hardening import (
     AuthGuardMiddleware,
     IdempotencyGuardMiddleware,
 )
+from .deprecated_guard import DeprecatedGuardMiddleware
 
 __all__ = [
     "AuthContextMiddleware",
@@ -22,4 +23,5 @@ __all__ = [
     "MutationRateLimitMiddleware",
     "AuthGuardMiddleware",
     "IdempotencyGuardMiddleware",
+    "DeprecatedGuardMiddleware",
 ]

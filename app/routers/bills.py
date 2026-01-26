@@ -1,6 +1,6 @@
 # app/routers/bills.py
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from pydantic import BaseModel
 from typing import Optional, List
 import sqlite3
@@ -10,6 +10,11 @@ import uuid
 from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/bills", tags=["bills"])
+
+
+def _get_request_id(request: Request) -> str:
+    """Get request_id from middleware or generate fallback."""
+    return getattr(request.state, "request_id", None) or str(uuid.uuid4())
 
 # =========================================================================
 # MODELS
@@ -79,18 +84,21 @@ class BillPaymentResponse(BaseModel):
 # ENDPOINTS
 # =========================================================================
 
-@router.get("/", response_model=List[BillResponse])
+@router.get("/", response_model=dict)
 async def get_bills(
+    request: Request,
     org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
-    status: Optional[str] = None,
+    bill_status: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):
     """
     Get all bills for an organization
 
     Filter by entity_id and/or status if provided
+    P0 FIX: Returns request_id on all responses.
     """
+    request_id = _get_request_id(request)
     try:
         from app.db import get_db_connection
 
@@ -118,9 +126,9 @@ async def get_bills(
             query += " AND b.entity_id = ?"
             params.append(entity_id)
 
-        if status:
+        if bill_status:
             query += " AND b.status = ?"
-            params.append(status)
+            params.append(bill_status)
 
         query += " ORDER BY b.due_date ASC"
 
@@ -147,14 +155,14 @@ async def get_bills(
                 notes=row[14],
                 created_at=row[15],
                 updated_at=row[16]
-            ))
+            ).dict())
 
-        return bills
+        return {"items": bills, "request_id": request_id}
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error fetching bills: {str(e)}"
+            detail={"error": "bills_list_failed", "message": str(e), "request_id": request_id}
         )
 
 

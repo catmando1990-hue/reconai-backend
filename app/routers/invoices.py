@@ -5,7 +5,7 @@ Invoicing API
 Handles invoice creation, management, and payment tracking
 """
 
-from fastapi import APIRouter, HTTPException, Depends, status, Query
+from fastapi import APIRouter, HTTPException, Depends, status, Query, Request
 from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Literal
 import sqlite3
@@ -17,6 +17,11 @@ from ..db import DB_PATH
 from app.auth_context import get_current_organization_id, get_current_user_id
 
 router = APIRouter(prefix="/api/invoices", tags=["Invoices"])
+
+
+def _get_request_id(request: Request) -> str:
+    """Get request_id from middleware or generate fallback."""
+    return getattr(request.state, "request_id", None) or str(uuid.uuid4())
 
 
 # =========================================================================
@@ -336,12 +341,13 @@ async def create_invoice(
         )
 
 
-@router.get("/", response_model=List[InvoiceResponse])
+@router.get("/", response_model=dict)
 async def list_invoices(
+    request: Request,
     org_id: str = Depends(get_current_organization_id),
     entity_id: Optional[str] = None,
     customer_id: Optional[str] = None,
-    status: Optional[str] = None,
+    invoice_status: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
@@ -350,7 +356,9 @@ async def list_invoices(
     List invoices for organization
 
     Filter by entity_id, customer_id, status, or date range
+    P0 FIX: Returns request_id on all responses.
     """
+    request_id = _get_request_id(request)
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -371,9 +379,9 @@ async def list_invoices(
                 query += " AND i.customer_id = ?"
                 params.append(customer_id)
 
-            if status:
+            if invoice_status:
                 query += " AND i.status = ?"
-                params.append(status)
+                params.append(invoice_status)
 
             if start_date:
                 query += " AND i.invoice_date >= ?"
@@ -435,14 +443,14 @@ async def list_invoices(
                     updated_at=invoice_row["updated_at"],
                     sent_at=invoice_row["sent_at"],
                     paid_at=invoice_row["paid_at"]
-                ))
+                ).dict())
 
-            return invoices
+            return {"items": invoices, "request_id": request_id}
 
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail={"error": "invoices_list_failed", "message": str(e), "request_id": request_id}
         )
 
 
