@@ -107,7 +107,14 @@ class ReconciliationVariance(BaseModel):
 
 
 class ReconciliationReport(BaseModel):
-    """Reconciliation report"""
+    """
+    Reconciliation report with immutable snapshot.
+
+    CANONICAL LAW: Snapshot Immutability
+    - Each reconciliation run captures a frozen snapshot at creation time
+    - Past reconciliation runs are UNAFFECTED by subsequent data changes
+    - Snapshot is stored in `snapshot_data` and is IMMUTABLE after creation
+    """
     id: str = Field(default_factory=lambda: str(uuid4()))
     report_type: ReconciliationType
     period_start: date
@@ -122,6 +129,22 @@ class ReconciliationReport(BaseModel):
     # Details
     variances: List[ReconciliationVariance] = []
     line_items: List[dict] = []
+
+    # SNAPSHOT IMMUTABILITY: Frozen data at reconciliation time
+    # This field is set once when the reconciliation is run and NEVER modified
+    # Ensures past runs are unaffected by subsequent data changes
+    snapshot_data: Optional[dict] = Field(
+        default=None,
+        description="Immutable snapshot of source data at reconciliation time"
+    )
+    snapshot_created_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp when snapshot was captured"
+    )
+    snapshot_hash: Optional[str] = Field(
+        default=None,
+        description="SHA-256 hash of snapshot for integrity verification"
+    )
 
     # Approval
     prepared_by: str
@@ -213,8 +236,26 @@ _checklists: dict[str, SF1408Checklist] = {}
 _audit_log: List[dict] = []
 
 
-def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, details: dict):
-    """Append to immutable audit log"""
+def _log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    user_id: str,
+    details: dict,
+    org_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    before_state: Optional[dict] = None,
+    after_state: Optional[dict] = None
+):
+    """
+    Append to immutable audit log with full context.
+
+    CANONICAL LAW: All mutations must be logged with:
+    - request_id: Correlation ID for the request
+    - org_id: Organization scope for multi-tenant filtering
+    - before_state: State before mutation (for updates/deletes)
+    - after_state: State after mutation (for creates/updates)
+    """
     entry = {
         "id": str(uuid4()),
         "timestamp": datetime.utcnow().isoformat(),
@@ -222,12 +263,46 @@ def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, deta
         "entity_type": entity_type,
         "entity_id": entity_id,
         "user_id": user_id,
+        "org_id": org_id,
+        "request_id": request_id or str(uuid4()),  # Generate if not provided
         "details": details,
+        "before_state": before_state,
+        "after_state": after_state,
         "immutable": True,
         "dcaa_compliant": True
     }
     _audit_log.append(entry)
     return entry
+
+
+def _create_snapshot(data: dict) -> tuple[dict, str]:
+    """
+    Create an immutable snapshot of data with integrity hash.
+
+    CANONICAL LAW: Snapshot Immutability
+    - Creates a deep copy of the data
+    - Generates SHA-256 hash for integrity verification
+    - Returns (snapshot_data, snapshot_hash)
+    """
+    import hashlib
+    import json
+    import copy
+
+    # Deep copy to ensure immutability
+    snapshot = copy.deepcopy(data)
+
+    # Add snapshot metadata
+    snapshot["_snapshot_metadata"] = {
+        "created_at": datetime.utcnow().isoformat(),
+        "immutable": True,
+        "canonical_law": "snapshot_immutability"
+    }
+
+    # Generate integrity hash
+    snapshot_json = json.dumps(snapshot, sort_keys=True, default=str)
+    snapshot_hash = hashlib.sha256(snapshot_json.encode()).hexdigest()
+
+    return snapshot, snapshot_hash
 
 
 # =============================================================================
@@ -236,14 +311,19 @@ def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, deta
 
 @router.post("/reports", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_reconciliation_report(
+    request: Request,
     report_type: ReconciliationType,
     period_start: date,
     period_end: date,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Create a new reconciliation report
     """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     report = ReconciliationReport(
         report_type=report_type,
         period_start=period_start,
@@ -262,7 +342,10 @@ async def create_reconciliation_report(
             "report_type": report_type.value,
             "period_start": period_start.isoformat(),
             "period_end": period_end.isoformat()
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        after_state={"status": "pending", "report_type": report_type.value}
     )
 
     return {
@@ -344,21 +427,45 @@ async def get_report(report_id: str):
 
 @router.post("/reports/{report_id}/run-labor", response_model=dict)
 async def run_labor_reconciliation(
+    request: Request,
     report_id: str,
     timesheet_total: float,
     payroll_total: float,
     gl_total: float,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Run labor cost reconciliation (ADVISORY)
 
     Compares timesheet labor to payroll and general ledger.
+
+    CANONICAL LAW: Snapshot Immutability
+    - Captures immutable snapshot of input data at reconciliation time
+    - Past runs are unaffected by subsequent data changes
     """
     if report_id not in _reports:
         raise HTTPException(status_code=404, detail="Report not found")
 
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     report = _reports[report_id]
+
+    # SNAPSHOT IMMUTABILITY: Capture input data at reconciliation time
+    source_data = {
+        "timesheet_total": timesheet_total,
+        "payroll_total": payroll_total,
+        "gl_total": gl_total,
+        "reconciliation_type": "labor",
+        "period_start": report.period_start.isoformat(),
+        "period_end": report.period_end.isoformat()
+    }
+    snapshot_data, snapshot_hash = _create_snapshot(source_data)
+    report.snapshot_data = snapshot_data
+    report.snapshot_hash = snapshot_hash
+    report.snapshot_created_at = datetime.utcnow()
+
     report.status = ReconciliationStatus.IN_PROGRESS
     report.source_total = timesheet_total
     report.target_total = payroll_total
@@ -408,8 +515,12 @@ async def run_labor_reconciliation(
             "timesheet_total": timesheet_total,
             "payroll_total": payroll_total,
             "gl_total": gl_total,
-            "variances_found": len(variances)
-        }
+            "variances_found": len(variances),
+            "snapshot_hash": snapshot_hash
+        },
+        org_id=org_id,
+        request_id=request_id,
+        after_state={"status": report.status.value, "snapshot_captured": True}
     )
 
     return {
@@ -421,6 +532,11 @@ async def run_labor_reconciliation(
             "gl": gl_total
         },
         "variances": [v.dict() for v in variances],
+        "snapshot": {
+            "captured": True,
+            "hash": snapshot_hash,
+            "immutable": True
+        },
         "advisory": {
             "type": "advisory",
             "autonomous": False,
@@ -432,19 +548,41 @@ async def run_labor_reconciliation(
 
 @router.post("/reports/{report_id}/run-indirect", response_model=dict)
 async def run_indirect_reconciliation(
+    request: Request,
     report_id: str,
     pool_data: List[dict],
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Run indirect cost reconciliation (ADVISORY)
 
     Verifies indirect pools tie to general ledger.
+
+    CANONICAL LAW: Snapshot Immutability
+    - Captures immutable snapshot of pool data at reconciliation time
+    - Past runs are unaffected by subsequent data changes
     """
     if report_id not in _reports:
         raise HTTPException(status_code=404, detail="Report not found")
 
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     report = _reports[report_id]
+
+    # SNAPSHOT IMMUTABILITY: Capture pool data at reconciliation time
+    source_data = {
+        "pool_data": pool_data,
+        "reconciliation_type": "indirect",
+        "period_start": report.period_start.isoformat(),
+        "period_end": report.period_end.isoformat()
+    }
+    snapshot_data, snapshot_hash = _create_snapshot(source_data)
+    report.snapshot_data = snapshot_data
+    report.snapshot_hash = snapshot_hash
+    report.snapshot_created_at = datetime.utcnow()
+
     report.status = ReconciliationStatus.IN_PROGRESS
 
     variances = []
@@ -489,8 +627,12 @@ async def run_indirect_reconciliation(
         details={
             "total_pool": total_pool,
             "total_gl": total_gl,
-            "variances_found": len(variances)
-        }
+            "variances_found": len(variances),
+            "snapshot_hash": snapshot_hash
+        },
+        org_id=org_id,
+        request_id=request_id,
+        after_state={"status": report.status.value, "snapshot_captured": True}
     )
 
     return {
@@ -502,6 +644,11 @@ async def run_indirect_reconciliation(
             "variance": report.variance_total
         },
         "variances": [v.dict() for v in variances],
+        "snapshot": {
+            "captured": True,
+            "hash": snapshot_hash,
+            "immutable": True
+        },
         "advisory": {
             "type": "advisory",
             "message": "Indirect reconciliation complete. Review variances."
@@ -511,11 +658,12 @@ async def run_indirect_reconciliation(
 
 @router.post("/reports/{report_id}/resolve-variance/{variance_id}", response_model=dict)
 async def resolve_variance(
+    request: Request,
     report_id: str,
     variance_id: str,
     resolution: str,
     evidence: dict,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Resolve a variance (REQUIRES EVIDENCE)
@@ -523,12 +671,17 @@ async def resolve_variance(
     if report_id not in _reports:
         raise HTTPException(status_code=404, detail="Report not found")
 
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     report = _reports[report_id]
 
     variance = next((v for v in report.variances if v.id == variance_id), None)
     if not variance:
         raise HTTPException(status_code=404, detail="Variance not found")
 
+    before_resolved = variance.resolved
     variance.resolution = resolution
     variance.resolved = True
     variance.resolved_at = datetime.utcnow()
@@ -547,7 +700,11 @@ async def resolve_variance(
             "report_id": report_id,
             "resolution": resolution,
             "evidence": evidence
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        before_state={"resolved": before_resolved},
+        after_state={"resolved": True, "resolution": resolution}
     )
 
     return {
@@ -563,9 +720,10 @@ async def resolve_variance(
 
 @router.post("/reports/{report_id}/approve", response_model=dict)
 async def approve_report(
+    request: Request,
     report_id: str,
-    approver_id: str,
-    approval_evidence: dict
+    approval_evidence: dict,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Approve a reconciliation report (MANUAL ACTION)
@@ -574,6 +732,9 @@ async def approve_report(
         raise HTTPException(status_code=404, detail="Report not found")
 
     report = _reports[report_id]
+    approver_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     if report.status != ReconciliationStatus.RECONCILED:
         raise HTTPException(
@@ -588,6 +749,7 @@ async def approve_report(
             detail=f"Cannot approve: {len(unresolved)} unresolved variances"
         )
 
+    before_status = report.status.value
     report.status = ReconciliationStatus.APPROVED
     report.approved_by = approver_id
     report.approved_at = datetime.utcnow()
@@ -600,7 +762,11 @@ async def approve_report(
         user_id=approver_id,
         details={
             "approval_evidence": approval_evidence
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        before_state={"status": before_status},
+        after_state={"status": "approved", "approved_by": approver_id}
     )
 
     return {

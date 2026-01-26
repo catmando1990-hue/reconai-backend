@@ -799,6 +799,11 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_merchant ON core_transactions(merchant_normalized)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_item ON core_transactions(plaid_item_id)")
 
+        # PERFORMANCE: Composite index for org + date queries (CFO reports, balance history, etc.)
+        # This index optimizes queries that filter by organization_id AND order by date
+        # Required per Performance Agent finding - Phase 1 Backend Delta
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_core_tx_org_date ON core_transactions(organization_id, date)")
+
         # =================================================================
         # S3 EXPORTS (Secure Export Downloads)
         # =================================================================

@@ -192,8 +192,26 @@ _rates: dict[str, IndirectRate] = {}
 _audit_log: List[dict] = []
 
 
-def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, details: dict):
-    """Append to immutable audit log"""
+def _log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    user_id: str,
+    details: dict,
+    org_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    before_state: Optional[dict] = None,
+    after_state: Optional[dict] = None
+):
+    """
+    Append to immutable audit log with full context.
+
+    CANONICAL LAW: All mutations must be logged with:
+    - request_id: Correlation ID for the request
+    - org_id: Organization scope for multi-tenant filtering
+    - before_state: State before mutation (for updates/deletes)
+    - after_state: State after mutation (for creates/updates)
+    """
     entry = {
         "id": str(uuid4()),
         "timestamp": datetime.utcnow().isoformat(),
@@ -201,7 +219,11 @@ def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, deta
         "entity_type": entity_type,
         "entity_id": entity_id,
         "user_id": user_id,
+        "org_id": org_id,
+        "request_id": request_id or str(uuid4()),  # Generate if not provided
         "details": details,
+        "before_state": before_state,
+        "after_state": after_state,
         "immutable": True,
         "dcaa_compliant": True
     }
@@ -272,16 +294,21 @@ async def get_pool(pool_id: str):
 
 @router.post("/pools", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_pool(
+    request: Request,
     name: str,
     pool_type: PoolType,
     allocation_base: AllocationBase,
     fiscal_year: int,
     description: Optional[str] = None,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Create a new indirect cost pool
     """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     pool = IndirectPool(
         name=name,
         pool_type=pool_type,
@@ -303,7 +330,10 @@ async def create_pool(
             "pool_type": pool_type.value,
             "allocation_base": allocation_base.value,
             "fiscal_year": fiscal_year
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        after_state={"name": name, "pool_type": pool_type.value}
     )
 
     return {
@@ -319,11 +349,12 @@ async def create_pool(
 
 @router.post("/pools/{pool_id}/costs", response_model=dict)
 async def add_pool_cost(
+    request: Request,
     pool_id: str,
     cost: PoolCostEntry,
     period_start: date,
     period_end: date,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Add a cost to an indirect pool (REQUIRES EVIDENCE)
@@ -332,6 +363,9 @@ async def add_pool_cost(
         raise HTTPException(status_code=404, detail="Pool not found")
 
     pool = _pools[pool_id]
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     # Validate evidence (CANONICAL LAW)
     if not cost.evidence or not isinstance(cost.evidence, dict):
@@ -339,6 +373,12 @@ async def add_pool_cost(
             status_code=400,
             detail="Evidence attachment required per canonical laws"
         )
+
+    # Capture before state
+    before_state = {
+        "total_pool_costs": pool.total_pool_costs,
+        "allowable_costs": pool.allowable_costs
+    }
 
     indirect_cost = IndirectCost(
         description=cost.description,
@@ -361,6 +401,12 @@ async def add_pool_cost(
     elif cost.allowability == CostAllowability.UNALLOWABLE:
         pool.unallowable_costs += cost.amount
 
+    # Capture after state
+    after_state = {
+        "total_pool_costs": pool.total_pool_costs,
+        "allowable_costs": pool.allowable_costs
+    }
+
     _log_audit(
         action="cost_added_to_pool",
         entity_type="indirect_cost",
@@ -371,7 +417,11 @@ async def add_pool_cost(
             "amount": cost.amount,
             "allowability": cost.allowability.value,
             "evidence": cost.evidence
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        before_state=before_state,
+        after_state=after_state
     )
 
     return {

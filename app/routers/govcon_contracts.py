@@ -225,8 +225,26 @@ _modifications: dict[str, ContractModification] = {}
 _audit_log: List[dict] = []
 
 
-def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, details: dict):
-    """Append to immutable audit log"""
+def _log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    user_id: str,
+    details: dict,
+    org_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    before_state: Optional[dict] = None,
+    after_state: Optional[dict] = None
+):
+    """
+    Append to immutable audit log with full context.
+
+    CANONICAL LAW: All mutations must be logged with:
+    - request_id: Correlation ID for the request
+    - org_id: Organization scope for multi-tenant filtering
+    - before_state: State before mutation (for updates/deletes)
+    - after_state: State after mutation (for creates/updates)
+    """
     entry = {
         "id": str(uuid4()),
         "timestamp": datetime.utcnow().isoformat(),
@@ -234,8 +252,13 @@ def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, deta
         "entity_type": entity_type,
         "entity_id": entity_id,
         "user_id": user_id,
+        "org_id": org_id,
+        "request_id": request_id or str(uuid4()),  # Generate if not provided
         "details": details,
-        "immutable": True
+        "before_state": before_state,
+        "after_state": after_state,
+        "immutable": True,
+        "dcaa_compliant": True
     }
     _audit_log.append(entry)
     return entry
@@ -278,8 +301,9 @@ async def get_contract(contract_id: str):
 
 @router.post("/", response_model=ContractResponse, status_code=status.HTTP_201_CREATED)
 async def create_contract(
+    request: Request,
     data: ContractCreate,
-    user_id: str = "system"  # In production, get from auth context
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Create a new contract (REQUIRES EVIDENCE)
@@ -292,6 +316,10 @@ async def create_contract(
             status_code=400,
             detail="Evidence attachment required per canonical laws"
         )
+
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     contract = Contract(
         contract_number=data.contract_number,
@@ -315,7 +343,7 @@ async def create_contract(
 
     _contracts[contract.id] = contract
 
-    # Audit log (IMMUTABLE)
+    # Audit log (IMMUTABLE) with full context
     _log_audit(
         action="contract_created",
         entity_type="contract",
@@ -325,7 +353,10 @@ async def create_contract(
             "contract_number": contract.contract_number,
             "total_value": contract.total_value,
             "evidence": data.evidence
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        after_state={"status": "draft", "contract_number": contract.contract_number}
     )
 
     return ContractResponse(
@@ -342,13 +373,14 @@ async def create_contract(
 
 @router.post("/{contract_id}/modifications", response_model=dict)
 async def request_modification(
+    request: Request,
     contract_id: str,
     modification_type: str,
     description: str,
     evidence: dict,
     value_change: Optional[float] = None,
     period_extension_days: Optional[int] = None,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Request a contract modification (REQUIRES MANUAL APPROVAL)
@@ -359,6 +391,9 @@ async def request_modification(
         raise HTTPException(status_code=404, detail="Contract not found")
 
     contract = _contracts[contract_id]
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     # Generate mod number
     mod_count = contract.modification_count + 1
@@ -377,7 +412,7 @@ async def request_modification(
 
     _modifications[modification.id] = modification
 
-    # Audit log
+    # Audit log with full context
     _log_audit(
         action="modification_requested",
         entity_type="contract_modification",
@@ -388,7 +423,10 @@ async def request_modification(
             "modification_number": mod_number,
             "modification_type": modification_type,
             "value_change": value_change
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        after_state={"status": "pending", "modification_number": mod_number}
     )
 
     now = datetime.utcnow().isoformat()
@@ -419,10 +457,11 @@ async def request_modification(
 
 @router.post("/{contract_id}/modifications/{mod_id}/approve", response_model=dict)
 async def approve_modification(
+    request: Request,
     contract_id: str,
     mod_id: str,
-    approver_id: str,
-    approval_evidence: dict
+    approval_evidence: dict,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Approve a contract modification (MANUAL ACTION ONLY)
@@ -433,6 +472,9 @@ async def approve_modification(
         raise HTTPException(status_code=404, detail="Modification not found")
 
     modification = _modifications[mod_id]
+    approver_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     if modification.status != ModificationStatus.PENDING:
         raise HTTPException(
@@ -440,9 +482,15 @@ async def approve_modification(
             detail=f"Modification is {modification.status}, cannot approve"
         )
 
-    # Apply modification
+    # Capture before state
     contract = _contracts[contract_id]
+    before_state = {
+        "total_value": contract.total_value,
+        "funded_value": contract.funded_value,
+        "modification_status": modification.status.value
+    }
 
+    # Apply modification
     if modification.value_change:
         contract.total_value += modification.value_change
         contract.funded_value += modification.value_change
@@ -460,7 +508,14 @@ async def approve_modification(
     modification.approved_by = approver_id
     modification.approved_at = datetime.utcnow()
 
-    # Audit log
+    # Capture after state
+    after_state = {
+        "total_value": contract.total_value,
+        "funded_value": contract.funded_value,
+        "modification_status": "approved"
+    }
+
+    # Audit log with full context
     _log_audit(
         action="modification_approved",
         entity_type="contract_modification",
@@ -470,7 +525,11 @@ async def approve_modification(
             "contract_id": contract_id,
             "modification_number": modification.modification_number,
             "approval_evidence": approval_evidence
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        before_state=before_state,
+        after_state=after_state
     )
 
     now = datetime.utcnow().isoformat()

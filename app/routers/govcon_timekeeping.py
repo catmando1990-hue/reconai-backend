@@ -189,8 +189,26 @@ _entries: dict[str, TimeEntry] = {}
 _audit_log: List[dict] = []
 
 
-def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, details: dict):
-    """Append to immutable audit log"""
+def _log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    user_id: str,
+    details: dict,
+    org_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    before_state: Optional[dict] = None,
+    after_state: Optional[dict] = None
+):
+    """
+    Append to immutable audit log with full context.
+
+    CANONICAL LAW: All mutations must be logged with:
+    - request_id: Correlation ID for the request
+    - org_id: Organization scope for multi-tenant filtering
+    - before_state: State before mutation (for updates/deletes)
+    - after_state: State after mutation (for creates/updates)
+    """
     entry = {
         "id": str(uuid4()),
         "timestamp": datetime.utcnow().isoformat(),
@@ -198,7 +216,11 @@ def _log_audit(action: str, entity_type: str, entity_id: str, user_id: str, deta
         "entity_type": entity_type,
         "entity_id": entity_id,
         "user_id": user_id,
+        "org_id": org_id,
+        "request_id": request_id or str(uuid4()),  # Generate if not provided
         "details": details,
+        "before_state": before_state,
+        "after_state": after_state,
         "immutable": True,
         "dcaa_compliant": True
     }
@@ -291,10 +313,11 @@ async def get_timesheet(timesheet_id: str):
 
 @router.post("/timesheets", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_timesheet(
+    request: Request,
     employee_id: str,
     employee_name: str,
     week_start: date,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Create a new timesheet for a week
@@ -328,15 +351,20 @@ async def create_timesheet(
 
     _timesheets[timesheet.id] = timesheet
 
+    # Use auth context for proper audit logging
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     _log_audit(
         action="timesheet_created",
         entity_type="timesheet",
         entity_id=timesheet.id,
-        user_id=user_id,
+        user_id=ctx["user_id"],
         details={
             "employee_id": employee_id,
             "week_start": week_start.isoformat()
-        }
+        },
+        org_id=ctx["org_id"],
+        request_id=request_id,
+        after_state={"status": "draft", "employee_id": employee_id}
     )
 
     return {
@@ -348,9 +376,10 @@ async def create_timesheet(
 
 @router.post("/timesheets/{timesheet_id}/entries", response_model=dict)
 async def add_time_entry(
+    request: Request,
     timesheet_id: str,
     entry: TimeEntryCreate,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Add a time entry to a timesheet
@@ -389,23 +418,27 @@ async def add_time_entry(
         task_order=entry.task_order,
         work_description=entry.work_description,
         labor_category=entry.labor_category,
-        created_by=user_id
+        created_by=ctx["user_id"]
     )
 
     timesheet.entries.append(time_entry)
     _entries[time_entry.id] = time_entry
 
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     _log_audit(
         action="time_entry_added",
         entity_type="time_entry",
         entity_id=time_entry.id,
-        user_id=user_id,
+        user_id=ctx["user_id"],
         details={
             "timesheet_id": timesheet_id,
             "date": entry.date.isoformat(),
             "hours": entry.hours,
             "charge_type": entry.charge_type.value
-        }
+        },
+        org_id=ctx["org_id"],
+        request_id=request_id,
+        after_state={"hours": entry.hours, "charge_type": entry.charge_type.value}
     )
 
     timesheet = _compute_totals(timesheet)
@@ -426,8 +459,9 @@ async def add_time_entry(
 
 @router.post("/timesheets/{timesheet_id}/submit", response_model=dict)
 async def submit_timesheet(
+    request: Request,
     timesheet_id: str,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Submit timesheet for approval (MANUAL ACTION)
@@ -436,6 +470,7 @@ async def submit_timesheet(
         raise HTTPException(status_code=404, detail="Timesheet not found")
 
     timesheet = _timesheets[timesheet_id]
+    before_status = timesheet.status.value
 
     if timesheet.status != TimesheetStatus.DRAFT:
         raise HTTPException(
@@ -461,17 +496,22 @@ async def submit_timesheet(
 
     timesheet.status = TimesheetStatus.SUBMITTED
     timesheet.submitted_at = datetime.utcnow()
-    timesheet.submitted_by = user_id
+    timesheet.submitted_by = ctx["user_id"]
 
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     _log_audit(
         action="timesheet_submitted",
         entity_type="timesheet",
         entity_id=timesheet_id,
-        user_id=user_id,
+        user_id=ctx["user_id"],
         details={
             "total_hours": timesheet.total_hours,
             "direct_hours": timesheet.direct_hours
-        }
+        },
+        org_id=ctx["org_id"],
+        request_id=request_id,
+        before_state={"status": before_status},
+        after_state={"status": "submitted", "submitted_at": timesheet.submitted_at.isoformat()}
     )
 
     return {
@@ -488,9 +528,10 @@ async def submit_timesheet(
 
 @router.post("/timesheets/{timesheet_id}/approve", response_model=dict)
 async def approve_timesheet(
+    request: Request,
     timesheet_id: str,
-    approver_id: str,
-    approval_evidence: dict
+    approval_evidence: dict,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Approve a timesheet (MANUAL SUPERVISOR ACTION)
@@ -501,6 +542,8 @@ async def approve_timesheet(
         raise HTTPException(status_code=404, detail="Timesheet not found")
 
     timesheet = _timesheets[timesheet_id]
+    before_status = timesheet.status.value
+    approver_id = ctx["user_id"]
 
     if timesheet.status != TimesheetStatus.SUBMITTED:
         raise HTTPException(
@@ -520,6 +563,7 @@ async def approve_timesheet(
     timesheet.approved_by = approver_id
     timesheet.evidence = approval_evidence
 
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     _log_audit(
         action="timesheet_approved",
         entity_type="timesheet",
@@ -529,7 +573,11 @@ async def approve_timesheet(
             "employee_id": timesheet.employee_id,
             "total_hours": timesheet.total_hours,
             "approval_evidence": approval_evidence
-        }
+        },
+        org_id=ctx["org_id"],
+        request_id=request_id,
+        before_state={"status": before_status},
+        after_state={"status": "approved", "approved_by": approver_id}
     )
 
     return {
@@ -543,19 +591,57 @@ async def approve_timesheet(
 
 @router.post("/timesheets/{timesheet_id}/correct", response_model=dict)
 async def correct_timesheet(
+    request: Request,
     timesheet_id: str,
     correction: TimesheetCorrection,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Submit a timesheet correction (REQUIRES EVIDENCE AND APPROVAL)
 
     DCAA requires documentation for any post-approval corrections.
+
+    CRITICAL: Lock-after-submit is ENFORCED.
+    Submitted/Approved timesheets are IMMUTABLE.
+    Admin unlock endpoint required for exceptional corrections.
     """
     if timesheet_id not in _timesheets:
         raise HTTPException(status_code=404, detail="Timesheet not found")
 
     timesheet = _timesheets[timesheet_id]
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # CRITICAL: Lock-after-submit - FAIL CLOSED (Canonical Law)
+    # Once submitted or approved, timesheets are IMMUTABLE
+    # This is a hard enforcement - no bypass allowed without admin unlock
+    if timesheet.status in [TimesheetStatus.SUBMITTED, TimesheetStatus.APPROVED]:
+        _log_audit(
+            action="correction_blocked_locked",
+            entity_type="timesheet",
+            entity_id=timesheet_id,
+            user_id=user_id,
+            details={
+                "reason": "lock_after_submit",
+                "timesheet_status": timesheet.status.value,
+                "attempted_entry_id": correction.entry_id,
+                "canonical_law": "immutable_after_submit"
+            },
+            org_id=org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "TIMESHEET_LOCKED",
+                "message": f"Cannot correct {timesheet.status.value} timesheet. Submitted/approved timesheets are immutable.",
+                "status": timesheet.status.value,
+                "immutable": True,
+                "canonical_law": "lock_after_submit",
+                "resolution": "Contact administrator to unlock timesheet for correction"
+            }
+        )
 
     # Find entry
     entry = next((e for e in timesheet.entries if e.id == correction.entry_id), None)
@@ -573,6 +659,13 @@ async def correct_timesheet(
     # Original entries are NEVER modified - corrections are additive
     original_hours = entry.hours
     original_entry_id = entry.id
+
+    # Capture before state for audit
+    before_state = {
+        "entry_id": original_entry_id,
+        "hours": original_hours,
+        "charge_type": entry.charge_type.value
+    }
 
     # Mark original entry as superseded (but DO NOT delete or modify hours)
     entry.modified_at = datetime.utcnow()
@@ -602,7 +695,14 @@ async def correct_timesheet(
     # Update timesheet status - requires re-approval
     timesheet.status = TimesheetStatus.CORRECTED
 
-    # Log BOTH the supersession and the correction
+    # Capture after state
+    after_state = {
+        "correction_entry_id": correction_entry.id,
+        "corrected_hours": correction.corrected_hours,
+        "status": "corrected"
+    }
+
+    # Log BOTH the supersession and the correction with full context
     _log_audit(
         action="time_entry_superseded",
         entity_type="time_entry",
@@ -613,7 +713,10 @@ async def correct_timesheet(
             "original_hours": original_hours,
             "status": "superseded",
             "superseded_by": correction_entry.id
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        before_state=before_state
     )
 
     _log_audit(
@@ -630,7 +733,11 @@ async def correct_timesheet(
             "evidence": correction.evidence,
             "confidence": correction.confidence,
             "preserves_original": True
-        }
+        },
+        org_id=org_id,
+        request_id=request_id,
+        before_state=before_state,
+        after_state=after_state
     )
 
     timesheet = _compute_totals(timesheet)
@@ -727,5 +834,107 @@ async def get_labor_distribution(
         "advisory": {
             "type": "advisory",
             "message": "Labor distribution data for DCAA compliance review."
+        }
+    }
+
+
+# =============================================================================
+# ADMIN UNLOCK ENDPOINT (Lock-After-Submit Exception Handler)
+# =============================================================================
+
+class AdminUnlockRequest(BaseModel):
+    """Admin unlock request - requires strong evidence and justification"""
+    justification: str = Field(..., min_length=50, description="Detailed justification for unlock (min 50 chars)")
+    evidence: dict = Field(..., description="Evidence supporting the unlock request")
+    supervisor_approval: str = Field(..., description="Supervisor who approved this unlock")
+    dcaa_notification: bool = Field(default=False, description="Has DCAA been notified of this correction?")
+
+
+@router.post("/timesheets/{timesheet_id}/admin-unlock", response_model=dict)
+async def admin_unlock_timesheet(
+    request: Request,
+    timesheet_id: str,
+    unlock_request: AdminUnlockRequest,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
+    """
+    Admin unlock for submitted/approved timesheet (EXCEPTIONAL USE ONLY)
+
+    DCAA CRITICAL: This endpoint allows unlocking a submitted/approved timesheet
+    for correction. This action is:
+    - Fully audited with before/after state
+    - Requires detailed justification
+    - Requires supervisor approval reference
+    - Should be followed by re-approval after correction
+
+    This is the ONLY way to correct a locked timesheet per canonical laws.
+    """
+    if timesheet_id not in _timesheets:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+
+    timesheet = _timesheets[timesheet_id]
+    previous_status = timesheet.status
+    admin_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # Only unlock if actually locked
+    if timesheet.status not in [TimesheetStatus.SUBMITTED, TimesheetStatus.APPROVED]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Timesheet is {timesheet.status.value}, not locked. No unlock needed."
+        )
+
+    # Capture before state for audit
+    before_state = {
+        "status": timesheet.status.value,
+        "submitted_at": timesheet.submitted_at.isoformat() if timesheet.submitted_at else None,
+        "approved_at": timesheet.approved_at.isoformat() if timesheet.approved_at else None,
+        "approved_by": timesheet.approved_by,
+        "total_hours": timesheet.total_hours
+    }
+
+    # Set to CORRECTED status (allows corrections, requires re-approval)
+    timesheet.status = TimesheetStatus.CORRECTED
+
+    # Capture after state
+    after_state = {
+        "status": timesheet.status.value,
+        "unlocked_at": datetime.utcnow().isoformat(),
+        "unlocked_by": admin_id
+    }
+
+    # CRITICAL: Log admin unlock with full audit trail
+    _log_audit(
+        action="admin_unlock_timesheet",
+        entity_type="timesheet",
+        entity_id=timesheet_id,
+        user_id=admin_id,
+        details={
+            "justification": unlock_request.justification,
+            "supervisor_approval": unlock_request.supervisor_approval,
+            "dcaa_notification": unlock_request.dcaa_notification,
+            "evidence": unlock_request.evidence,
+            "canonical_law": "admin_unlock_exception",
+            "requires_reapproval": True
+        },
+        org_id=org_id,
+        request_id=request_id,
+        before_state=before_state,
+        after_state=after_state
+    )
+
+    return {
+        "unlocked": True,
+        "timesheet_id": timesheet_id,
+        "previous_status": previous_status.value,
+        "new_status": timesheet.status.value,
+        "audit_logged": True,
+        "requires_reapproval": True,
+        "advisory": {
+            "type": "advisory",
+            "autonomous": False,
+            "message": "Timesheet unlocked for correction. MUST be re-approved after correction.",
+            "dcaa_warning": "This action is fully audited. Ensure DCAA notification if required."
         }
     }
