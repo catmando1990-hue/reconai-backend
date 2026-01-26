@@ -21,7 +21,9 @@ DB_PATH = Path(os.getenv("DB_PATH", str(DATA_DIR / "reconai.db")))
 
 def get_db_connection():
     """Get SQLite database connection"""
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def init_db() -> None:
@@ -856,6 +858,93 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_ev_links_export ON export_evidence_links(export_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_ev_links_evidence ON export_evidence_links(evidence_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_ev_links_type ON export_evidence_links(evidence_type)")
+
+        # =================================================================
+        # PHASE 4: CONTROL-PLANE SCHEMA (P1 Endpoints Support)
+        # =================================================================
+        # These tables support the P1 manual-first endpoints:
+        # - /api/signals (advisory intelligence)
+        # - /api/receipts (receipt/statement fallback)
+        # - /api/export-pack (manual export requests)
+        # - /api/retention (evidence retention policies)
+        # - /api/rbac (effective permissions snapshot)
+
+        # 001: Intelligence Signals (advisory-only, confidence-gated)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS intelligence_signals (
+                signal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                confidence REAL NOT NULL CHECK (confidence >= 0.0 AND confidence <= 1.0),
+                evidence_ref TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # 002: Receipts
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS receipts (
+                receipt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                total REAL NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                received_date TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # 003: Statements (fallback for receipts endpoint)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS statements (
+                statement_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                total REAL NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                posted_date TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # 004: Export Packs (manual request, no auto-execute)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS export_packs (
+                export_pack_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('requested', 'running', 'completed', 'failed')),
+                requested_at TEXT NOT NULL,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # 005: Retention Policies (evidence scope)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS retention_policies (
+                policy_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                scope TEXT NOT NULL,
+                policy_name TEXT NOT NULL,
+                retention_days INTEGER NOT NULL CHECK (retention_days >= 0),
+                enforced_from TEXT NOT NULL,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # 006: RBAC Effective Permissions (snapshot view)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rbac_effective_permissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                permission TEXT NOT NULL,
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            )
+        """)
 
         conn.commit()
         print("Multi-tenancy database tables created")

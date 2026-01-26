@@ -644,3 +644,73 @@ async def delete_receipt(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting receipt: {str(e)}"
         )
+
+
+# =========================================================================
+# P1 ENDPOINT - Phase 4 Receipts Table (control-plane schema)
+# =========================================================================
+
+def _get_request_id(request: Request) -> str:
+    """Get request_id from middleware or generate fallback."""
+    return getattr(request.state, "request_id", None) or str(uuid.uuid4())
+
+
+@router.get("/p1", tags=["receipts", "p1"])
+async def get_receipts_p1(
+    request: Request,
+    organization_id: str = Depends(get_current_organization_id)
+):
+    """
+    P1 Endpoint: List receipts from Phase 4 control-plane receipts table.
+
+    Returns receipts for the authenticated organization.
+    NO fallback to statements table.
+    NO inference from core_transactions.
+
+    Response format: {"items": [...], "request_id": "<uuid>"}
+    """
+    from app.db import get_db_connection
+    from fastapi.responses import JSONResponse
+
+    request_id = _get_request_id(request)
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Query Phase 4 receipts table (control-plane schema)
+        # NO fallback to statements, NO inference from core_transactions
+        sql = """
+            SELECT receipt_id, source, total, currency, received_date, created_at
+            FROM receipts
+            WHERE organization_id = ?
+            ORDER BY received_date DESC
+        """
+
+        cursor.execute(sql, (organization_id,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        items = []
+        for row in rows:
+            items.append({
+                "receipt_id": row[0],
+                "source": row[1],
+                "total": row[2],
+                "currency": row[3],
+                "received_date": row[4],
+                "created_at": row[5]
+            })
+
+        return {"items": items, "request_id": request_id}
+
+    except Exception as e:
+        logger.exception("P1 receipts endpoint error")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "receipts_fetch_failed",
+                "detail": str(e),
+                "request_id": request_id
+            }
+        )
