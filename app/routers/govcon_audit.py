@@ -494,6 +494,7 @@ async def get_entity_audit_trail(
 
 @router.post("/export", response_model=dict)
 async def export_audit_log(
+    request: Request,
     query: AuditQuery,
     export_format: str = "json",
     exporter_id: str = "system"
@@ -502,77 +503,95 @@ async def export_audit_log(
     Export audit log for DCAA review (CREATES EXPORT RECORD)
 
     Exports filtered audit log and creates record of the export.
+
+    P2 HARDENING: Structured error handling with request_id propagation.
     """
-    # Query from database with filters
-    records = get_audit_events(
-        entity_type=query.entity_type,
-        entity_id=query.entity_id,
-        event_type=query.event_types[0].value if query.event_types and len(query.event_types) == 1 else None,
-        actor_id=query.user_id,
-        start_date=query.start_date.isoformat() if query.start_date else None,
-        end_date=query.end_date.isoformat() if query.end_date else None,
-        limit=10000,  # High limit for exports
-    )
+    # P2 HARDENING: Capture request_id for error traceability
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
-    entries = [_record_to_entry(r) for r in records]
+    try:
+        # Query from database with filters
+        records = get_audit_events(
+            entity_type=query.entity_type,
+            entity_id=query.entity_id,
+            event_type=query.event_types[0].value if query.event_types and len(query.event_types) == 1 else None,
+            actor_id=query.user_id,
+            start_date=query.start_date.isoformat() if query.start_date else None,
+            end_date=query.end_date.isoformat() if query.end_date else None,
+            limit=10000,  # High limit for exports
+        )
 
-    # Apply post-query filters
-    if query.event_types and len(query.event_types) > 1:
-        entries = [e for e in entries if e.event_type in query.event_types]
-    if query.severity:
-        entries = [e for e in entries if e.severity == query.severity]
-    if query.dcaa_relevant_only:
-        entries = [e for e in entries if e.dcaa_relevant]
+        entries = [_record_to_entry(r) for r in records]
 
-    # Compute export hash for integrity
-    export_data = [e.dict() for e in entries]
-    export_hash = _compute_hash({"entries": export_data})
+        # Apply post-query filters
+        if query.event_types and len(query.event_types) > 1:
+            entries = [e for e in entries if e.event_type in query.event_types]
+        if query.severity:
+            entries = [e for e in entries if e.severity == query.severity]
+        if query.dcaa_relevant_only:
+            entries = [e for e in entries if e.dcaa_relevant]
 
-    # Create export record
-    export_record = AuditExport(
-        exported_by=exporter_id,
-        query_params=query,
-        entry_count=len(entries),
-        export_hash=export_hash,
-        export_format=export_format
-    )
+        # Compute export hash for integrity
+        export_data = [e.dict() for e in entries]
+        export_hash = _compute_hash({"entries": export_data})
 
-    _audit_exports.append(export_record)
+        # Create export record
+        export_record = AuditExport(
+            exported_by=exporter_id,
+            query_params=query,
+            entry_count=len(entries),
+            export_hash=export_hash,
+            export_format=export_format
+        )
 
-    # Log the export itself
-    log_audit_event(
-        event_type=AuditEventType.EXPORT_GENERATED,
-        entity_type="audit_export",
-        entity_id=export_record.id,
-        user_id=exporter_id,
-        description=f"Audit log exported: {len(entries)} entries",
-        changes={"query": query.dict(), "entry_count": len(entries)},
-        dcaa_relevant=True
-    )
+        _audit_exports.append(export_record)
 
-    now = datetime.utcnow().isoformat()
-    return {
-        # Contract version - ALWAYS present
-        "govcon_version": GOVCON_CONTRACT_VERSION,
-        # Lifecycle - ALWAYS present
-        "lifecycle": {"status": "success", "reason_code": None},
-        # Evidence metadata - ALWAYS present
-        "evidence": {
-            "sources": ["audit_events", "audit_export"],
-            "coverage_window": {"start": None, "end": None},
-            "evaluated_at": now,
-            "dcaa_compliant": True,
-        },
-        "export_id": export_record.id,
-        "entry_count": len(entries),
-        "export_hash": export_hash,
-        "export_format": export_format,
-        "data": export_data if export_format == "json" else None,
-        "advisory": {
-            "type": "advisory",
-            "message": "Export created and logged. Hash can be used for integrity verification."
+        # Log the export itself
+        log_audit_event(
+            event_type=AuditEventType.EXPORT_GENERATED,
+            entity_type="audit_export",
+            entity_id=export_record.id,
+            user_id=exporter_id,
+            description=f"Audit log exported: {len(entries)} entries",
+            changes={"query": query.dict(), "entry_count": len(entries)},
+            dcaa_relevant=True
+        )
+
+        now = datetime.utcnow().isoformat()
+        return {
+            # Contract version - ALWAYS present
+            "govcon_version": GOVCON_CONTRACT_VERSION,
+            # Lifecycle - ALWAYS present
+            "lifecycle": {"status": "success", "reason_code": None},
+            # Evidence metadata - ALWAYS present
+            "evidence": {
+                "sources": ["audit_events", "audit_export"],
+                "coverage_window": {"start": None, "end": None},
+                "evaluated_at": now,
+                "dcaa_compliant": True,
+            },
+            "export_id": export_record.id,
+            "entry_count": len(entries),
+            "export_hash": export_hash,
+            "export_format": export_format,
+            "data": export_data if export_format == "json" else None,
+            "request_id": request_id,
+            "advisory": {
+                "type": "advisory",
+                "message": "Export created and logged. Hash can be used for integrity verification."
+            }
         }
-    }
+
+    except Exception as e:
+        # P2 HARDENING: Structured error envelope with request_id
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "EXPORT_FAILED",
+                "message": f"Audit log export failed: {str(e)}",
+                "request_id": request_id,
+            },
+        ) from e
 
 
 @router.get("/exports", response_model=dict)
