@@ -116,6 +116,7 @@ class ReconciliationReport(BaseModel):
     - Snapshot is stored in `snapshot_data` and is IMMUTABLE after creation
     """
     id: str = Field(default_factory=lambda: str(uuid4()))
+    org_id: str = Field(..., description="Organization ID - REQUIRED for multi-tenant isolation")
     report_type: ReconciliationType
     period_start: date
     period_end: date
@@ -164,6 +165,7 @@ class ReconciliationReport(BaseModel):
 class IncurredCostSubmission(BaseModel):
     """Annual Incurred Cost Submission (ICS)"""
     id: str = Field(default_factory=lambda: str(uuid4()))
+    org_id: str = Field(..., description="Organization ID - REQUIRED for multi-tenant isolation")
     fiscal_year: int
     contractor_name: str
     contractor_cage: str
@@ -191,6 +193,7 @@ class IncurredCostSubmission(BaseModel):
 class SF1408Checklist(BaseModel):
     """SF-1408 Preaward Survey Checklist"""
     id: str = Field(default_factory=lambda: str(uuid4()))
+    org_id: str = Field(..., description="Organization ID - REQUIRED for multi-tenant isolation")
     contractor_name: str
     contractor_cage: str
     survey_date: date
@@ -275,6 +278,135 @@ def _log_audit(
     return entry
 
 
+def _require_report_org_ownership(
+    report_id: str,
+    ctx_org_id: str,
+    user_id: str,
+    request_id: str
+) -> ReconciliationReport:
+    """
+    P0 SECURITY: Verify org ownership before any access.
+
+    CANONICAL LAW: Multi-tenant isolation
+    """
+    if report_id not in _reports:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    report = _reports[report_id]
+
+    if report.org_id != ctx_org_id:
+        _log_audit(
+            action="unauthorized_access_blocked",
+            entity_type="reconciliation_report",
+            entity_id=report_id,
+            user_id=user_id,
+            details={
+                "reason": "org_mismatch",
+                "attempted_org": ctx_org_id,
+                "resource_org": report.org_id,
+                "canonical_law": "multi_tenant_isolation"
+            },
+            org_id=ctx_org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ORG_ACCESS_DENIED",
+                "message": "Resource does not belong to your organization",
+                "canonical_law": "multi_tenant_isolation"
+            }
+        )
+
+    return report
+
+
+def _require_submission_org_ownership(
+    submission_id: str,
+    ctx_org_id: str,
+    user_id: str,
+    request_id: str
+) -> IncurredCostSubmission:
+    """
+    P0 SECURITY: Verify org ownership for ICS before any access.
+
+    CANONICAL LAW: Multi-tenant isolation
+    """
+    if submission_id not in _submissions:
+        raise HTTPException(status_code=404, detail="Submission not found")
+
+    submission = _submissions[submission_id]
+
+    if submission.org_id != ctx_org_id:
+        _log_audit(
+            action="unauthorized_access_blocked",
+            entity_type="incurred_cost_submission",
+            entity_id=submission_id,
+            user_id=user_id,
+            details={
+                "reason": "org_mismatch",
+                "attempted_org": ctx_org_id,
+                "resource_org": submission.org_id,
+                "canonical_law": "multi_tenant_isolation"
+            },
+            org_id=ctx_org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ORG_ACCESS_DENIED",
+                "message": "Resource does not belong to your organization",
+                "canonical_law": "multi_tenant_isolation"
+            }
+        )
+
+    return submission
+
+
+def _require_checklist_org_ownership(
+    checklist_id: str,
+    ctx_org_id: str,
+    user_id: str,
+    request_id: str
+) -> SF1408Checklist:
+    """
+    P0 SECURITY: Verify org ownership for SF1408 before any access.
+
+    CANONICAL LAW: Multi-tenant isolation
+    """
+    if checklist_id not in _checklists:
+        raise HTTPException(status_code=404, detail="Checklist not found")
+
+    checklist = _checklists[checklist_id]
+
+    if checklist.org_id != ctx_org_id:
+        _log_audit(
+            action="unauthorized_access_blocked",
+            entity_type="sf1408_checklist",
+            entity_id=checklist_id,
+            user_id=user_id,
+            details={
+                "reason": "org_mismatch",
+                "attempted_org": ctx_org_id,
+                "resource_org": checklist.org_id,
+                "canonical_law": "multi_tenant_isolation"
+            },
+            org_id=ctx_org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ORG_ACCESS_DENIED",
+                "message": "Resource does not belong to your organization",
+                "canonical_law": "multi_tenant_isolation"
+            }
+        )
+
+    return checklist
+
+
 def _create_snapshot(data: dict) -> tuple[dict, str]:
     """
     Create an immutable snapshot of data with integrity hash.
@@ -325,6 +457,7 @@ async def create_reconciliation_report(
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     report = ReconciliationReport(
+        org_id=org_id,  # P0 SECURITY: Store org ownership
         report_type=report_type,
         period_start=period_start,
         period_end=period_end,
@@ -362,23 +495,30 @@ async def create_reconciliation_report(
 
 @router.get("/reports", response_model=dict)
 async def list_reports(
+    request: Request,
     report_type: Optional[ReconciliationType] = None,
-    status: Optional[ReconciliationStatus] = None,
+    report_status: Optional[ReconciliationStatus] = None,
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     List reconciliation reports (READ-ONLY, PAGINATED)
+
+    P0 SECURITY: Only returns reports belonging to caller's org.
     """
-    reports = list(_reports.values())
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter by org_id FIRST
+    reports = [r for r in _reports.values() if r.org_id == org_id]
 
     if report_type:
         reports = [r for r in reports if r.report_type == report_type]
-    if status:
-        reports = [r for r in reports if r.status == status]
+    if report_status:
+        reports = [r for r in reports if r.status == report_status]
 
-    # Sort by created_at descending
-    reports.sort(key=lambda r: r.created_at, reverse=True)
+    # Sort by prepared_at descending
+    reports.sort(key=lambda r: r.prepared_at, reverse=True)
 
     # Pagination
     total = len(reports)
@@ -402,14 +542,22 @@ async def list_reports(
 
 
 @router.get("/reports/{report_id}", response_model=dict)
-async def get_report(report_id: str):
+async def get_report(
+    request: Request,
+    report_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get reconciliation report by ID (READ-ONLY)
-    """
-    if report_id not in _reports:
-        raise HTTPException(status_code=404, detail="Report not found")
 
-    report = _reports[report_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    report = _require_report_org_ownership(
+        report_id, ctx["org_id"], ctx["user_id"], request_id
+    )
 
     return {
         "report": report.dict(),
@@ -442,15 +590,15 @@ async def run_labor_reconciliation(
     CANONICAL LAW: Snapshot Immutability
     - Captures immutable snapshot of input data at reconciliation time
     - Past runs are unaffected by subsequent data changes
-    """
-    if report_id not in _reports:
-        raise HTTPException(status_code=404, detail="Report not found")
 
+    P0 SECURITY: Requires org ownership verification.
+    """
     user_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
-    report = _reports[report_id]
+    # P0 SECURITY: Verify org ownership
+    report = _require_report_org_ownership(report_id, org_id, user_id, request_id)
 
     # SNAPSHOT IMMUTABILITY: Capture input data at reconciliation time
     source_data = {
@@ -561,15 +709,15 @@ async def run_indirect_reconciliation(
     CANONICAL LAW: Snapshot Immutability
     - Captures immutable snapshot of pool data at reconciliation time
     - Past runs are unaffected by subsequent data changes
-    """
-    if report_id not in _reports:
-        raise HTTPException(status_code=404, detail="Report not found")
 
+    P0 SECURITY: Requires org ownership verification.
+    """
     user_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
-    report = _reports[report_id]
+    # P0 SECURITY: Verify org ownership
+    report = _require_report_org_ownership(report_id, org_id, user_id, request_id)
 
     # SNAPSHOT IMMUTABILITY: Capture pool data at reconciliation time
     source_data = {
@@ -667,15 +815,15 @@ async def resolve_variance(
 ):
     """
     Resolve a variance (REQUIRES EVIDENCE)
-    """
-    if report_id not in _reports:
-        raise HTTPException(status_code=404, detail="Report not found")
 
+    P0 SECURITY: Requires org ownership verification.
+    """
     user_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
-    report = _reports[report_id]
+    # P0 SECURITY: Verify org ownership before any access
+    report = _require_report_org_ownership(report_id, org_id, user_id, request_id)
 
     variance = next((v for v in report.variances if v.id == variance_id), None)
     if not variance:
@@ -727,14 +875,15 @@ async def approve_report(
 ):
     """
     Approve a reconciliation report (MANUAL ACTION)
-    """
-    if report_id not in _reports:
-        raise HTTPException(status_code=404, detail="Report not found")
 
-    report = _reports[report_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
     approver_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership before any access
+    report = _require_report_org_ownership(report_id, org_id, approver_id, request_id)
 
     if report.status != ReconciliationStatus.RECONCILED:
         raise HTTPException(
@@ -784,17 +933,26 @@ async def approve_report(
 
 @router.post("/incurred-cost", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_incurred_cost_submission(
+    request: Request,
     fiscal_year: int,
     contractor_name: str,
     contractor_cage: str,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Create an Incurred Cost Submission (ICS)
 
     Per FAR 52.216-7, contractors must submit annual ICS.
+
+    P0 SECURITY: Uses AuthContext for user/org identification.
+    P2 FIX: Removed user_id="system" default.
     """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     submission = IncurredCostSubmission(
+        org_id=org_id,
         fiscal_year=fiscal_year,
         contractor_name=contractor_name,
         contractor_cage=contractor_cage,
@@ -811,7 +969,9 @@ async def create_incurred_cost_submission(
         details={
             "fiscal_year": fiscal_year,
             "contractor_name": contractor_name
-        }
+        },
+        org_id=org_id,
+        request_id=request_id
     )
 
     return {
@@ -827,14 +987,22 @@ async def create_incurred_cost_submission(
 
 
 @router.get("/incurred-cost/{submission_id}", response_model=dict)
-async def get_incurred_cost_submission(submission_id: str):
+async def get_incurred_cost_submission(
+    request: Request,
+    submission_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get Incurred Cost Submission (READ-ONLY)
-    """
-    if submission_id not in _submissions:
-        raise HTTPException(status_code=404, detail="Submission not found")
 
-    submission = _submissions[submission_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership before any access
+    submission = _require_submission_org_ownership(submission_id, org_id, user_id, request_id)
 
     return {
         "submission": submission.dict(),
@@ -861,15 +1029,24 @@ async def get_incurred_cost_submission(submission_id: str):
 
 @router.post("/sf1408", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_sf1408_checklist(
+    request: Request,
     contractor_name: str,
     contractor_cage: str,
     survey_date: date,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Create SF-1408 Preaward Survey Checklist
+
+    P0 SECURITY: Uses AuthContext for user/org identification.
+    P2 FIX: Removed user_id="system" default.
     """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     checklist = SF1408Checklist(
+        org_id=org_id,
         contractor_name=contractor_name,
         contractor_cage=contractor_cage,
         survey_date=survey_date
@@ -885,7 +1062,9 @@ async def create_sf1408_checklist(
         details={
             "contractor_name": contractor_name,
             "survey_date": survey_date.isoformat()
-        }
+        },
+        org_id=org_id,
+        request_id=request_id
     )
 
     return {
@@ -908,14 +1087,22 @@ async def create_sf1408_checklist(
 
 
 @router.get("/sf1408/{checklist_id}", response_model=dict)
-async def get_sf1408_checklist(checklist_id: str):
+async def get_sf1408_checklist(
+    request: Request,
+    checklist_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get SF-1408 checklist (READ-ONLY)
-    """
-    if checklist_id not in _checklists:
-        raise HTTPException(status_code=404, detail="Checklist not found")
 
-    checklist = _checklists[checklist_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership before any access
+    checklist = _require_checklist_org_ownership(checklist_id, org_id, user_id, request_id)
 
     adequate_count = sum([
         checklist.accounting_system_adequate,
@@ -942,8 +1129,20 @@ async def get_sf1408_checklist(checklist_id: str):
 
 
 @router.get("/audit-trail", response_model=List[dict])
-async def get_reconciliation_audit_trail():
+async def get_reconciliation_audit_trail(
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
-    Get immutable audit trail for all reconciliation activities
+    Get immutable audit trail for reconciliation activities (filtered by org)
+
+    P0 SECURITY: Only returns audit entries for caller's organization.
     """
-    return _audit_log
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter audit log by org_id
+    org_audit_entries = [
+        entry for entry in _audit_log
+        if entry.get("org_id") == org_id
+    ]
+
+    return org_audit_entries

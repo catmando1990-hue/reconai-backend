@@ -47,11 +47,22 @@ class IncidentGuardMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Check incident mode status
+        # P1 FIX: FAIL-CLOSED - block requests if we can't determine status
         try:
             incident_mode = self._check_incident_mode()
-        except Exception:
-            # If we can't check, allow request through
-            return await call_next(request)
+        except Exception as e:
+            # P1 FIX: FAIL-CLOSED - if we can't check, block the request
+            # This is the secure default per canonical laws
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "error": "SERVICE_UNAVAILABLE",
+                    "message": "ReconAI incident mode status could not be determined. Failing closed for safety.",
+                    "incident_mode": True,
+                    "fail_closed": True,
+                    "canonical_law": "fail_closed_on_uncertainty"
+                }
+            )
 
         if incident_mode:
             return JSONResponse(
@@ -66,7 +77,12 @@ class IncidentGuardMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     def _check_incident_mode(self) -> bool:
-        """Check if incident mode is active."""
+        """
+        Check if incident mode is active.
+
+        P1 FIX: FAIL-CLOSED - raises exception on DB errors
+        so caller can handle with fail-closed behavior.
+        """
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.row_factory = sqlite3.Row
@@ -76,6 +92,10 @@ class IncidentGuardMiddleware(BaseHTTPMiddleware):
 
                 if row:
                     return bool(row["incident_mode"])
-                return False
-        except sqlite3.Error:
-            return False
+                # P1 FIX: If no system_state row exists, fail closed (assume incident mode)
+                # This prevents bypass if system_state table is empty/missing
+                return True
+        except sqlite3.Error as e:
+            # P1 FIX: FAIL-CLOSED - re-raise so dispatch() handles with 503
+            # Do NOT return False (fail-open) on database errors
+            raise RuntimeError(f"Cannot determine incident mode status: {e}") from e

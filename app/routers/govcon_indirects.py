@@ -117,6 +117,7 @@ class IndirectCost(BaseModel):
 class IndirectPool(BaseModel):
     """Indirect cost pool"""
     id: str = Field(default_factory=lambda: str(uuid4()))
+    org_id: str = Field(..., description="Organization ID - REQUIRED for multi-tenant isolation")
     name: str
     pool_type: PoolType
     allocation_base: AllocationBase
@@ -231,19 +232,74 @@ def _log_audit(
     return entry
 
 
+def _require_pool_org_ownership(
+    pool_id: str,
+    ctx_org_id: str,
+    user_id: str,
+    request_id: str
+) -> IndirectPool:
+    """
+    P0 SECURITY: Verify org ownership before any access.
+
+    CANONICAL LAW: Multi-tenant isolation
+    - Resource MUST belong to caller's org
+    - Logs unauthorized access attempts
+    - Returns 403 on mismatch, 404 if not found
+    """
+    if pool_id not in _pools:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    pool = _pools[pool_id]
+
+    # P0 SECURITY: Verify org ownership
+    if pool.org_id != ctx_org_id:
+        # Log unauthorized access attempt
+        _log_audit(
+            action="unauthorized_access_blocked",
+            entity_type="indirect_pool",
+            entity_id=pool_id,
+            user_id=user_id,
+            details={
+                "reason": "org_mismatch",
+                "attempted_org": ctx_org_id,
+                "resource_org": pool.org_id,
+                "canonical_law": "multi_tenant_isolation"
+            },
+            org_id=ctx_org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ORG_ACCESS_DENIED",
+                "message": "Resource does not belong to your organization",
+                "canonical_law": "multi_tenant_isolation"
+            }
+        )
+
+    return pool
+
+
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
 
 @router.get("/pools", response_model=List[dict])
 async def list_pools(
+    request: Request,
     pool_type: Optional[PoolType] = None,
-    fiscal_year: Optional[int] = None
+    fiscal_year: Optional[int] = None,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     List indirect cost pools (READ-ONLY, advisory)
+
+    P0 SECURITY: Only returns pools belonging to caller's org.
     """
-    pools = list(_pools.values())
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter by org_id FIRST
+    pools = [p for p in _pools.values() if p.org_id == org_id]
 
     if pool_type:
         pools = [p for p in pools if p.pool_type == pool_type]
@@ -264,14 +320,22 @@ async def list_pools(
 
 
 @router.get("/pools/{pool_id}", response_model=dict)
-async def get_pool(pool_id: str):
+async def get_pool(
+    request: Request,
+    pool_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get indirect pool by ID (READ-ONLY)
-    """
-    if pool_id not in _pools:
-        raise HTTPException(status_code=404, detail="Pool not found")
 
-    pool = _pools[pool_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    pool = _require_pool_org_ownership(
+        pool_id, ctx["org_id"], ctx["user_id"], request_id
+    )
 
     # Get associated costs
     pool_costs = [c for c in _costs.values() if c.pool_type == pool.pool_type]
@@ -310,6 +374,7 @@ async def create_pool(
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     pool = IndirectPool(
+        org_id=org_id,  # P0 SECURITY: Store org ownership
         name=name,
         pool_type=pool_type,
         allocation_base=allocation_base,
@@ -358,14 +423,15 @@ async def add_pool_cost(
 ):
     """
     Add a cost to an indirect pool (REQUIRES EVIDENCE)
-    """
-    if pool_id not in _pools:
-        raise HTTPException(status_code=404, detail="Pool not found")
 
-    pool = _pools[pool_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
     user_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    pool = _require_pool_org_ownership(pool_id, org_id, user_id, request_id)
 
     # Validate evidence (CANONICAL LAW)
     if not cost.evidence or not isinstance(cost.evidence, dict):
@@ -440,19 +506,25 @@ async def add_pool_cost(
 
 @router.post("/pools/{pool_id}/calculate-rate", response_model=dict)
 async def calculate_pool_rate(
+    request: Request,
     pool_id: str,
     allocation_base_amount: float,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)  # P2 FIX: Use AuthContext instead of user_id="system"
 ):
     """
     Calculate indirect rate for a pool (ADVISORY ONLY)
 
     Returns calculated rate for review. Does not automatically apply.
-    """
-    if pool_id not in _pools:
-        raise HTTPException(status_code=404, detail="Pool not found")
 
-    pool = _pools[pool_id]
+    P0 SECURITY: Requires org ownership verification.
+    P2 FIX: Uses AuthContext instead of user_id="system".
+    """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    pool = _require_pool_org_ownership(pool_id, org_id, user_id, request_id)
 
     if allocation_base_amount <= 0:
         raise HTTPException(
@@ -471,12 +543,14 @@ async def calculate_pool_rate(
         action="rate_calculated",
         entity_type="indirect_pool",
         entity_id=pool_id,
-        user_id=user_id,
+        user_id=user_id,  # P2 FIX: Real user_id from AuthContext
         details={
             "allowable_costs": pool.allowable_costs,
             "allocation_base": allocation_base_amount,
             "calculated_rate": calculated_rate
-        }
+        },
+        org_id=org_id,
+        request_id=request_id
     )
 
     return {
@@ -503,19 +577,25 @@ async def calculate_pool_rate(
 
 @router.post("/rates", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_rate_record(
+    request: Request,
     pool_id: str,
     provisional_rate: float,
     effective_date: date,
     evidence: dict,
-    user_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)  # P2 FIX: Use AuthContext instead of user_id="system"
 ):
     """
     Create an indirect rate record (REQUIRES EVIDENCE)
-    """
-    if pool_id not in _pools:
-        raise HTTPException(status_code=404, detail="Pool not found")
 
-    pool = _pools[pool_id]
+    P0 SECURITY: Requires org ownership verification.
+    P2 FIX: Uses AuthContext instead of user_id="system".
+    """
+    user_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership of pool
+    pool = _require_pool_org_ownership(pool_id, org_id, user_id, request_id)
 
     rate = IndirectRate(
         pool_id=pool_id,
@@ -532,13 +612,15 @@ async def create_rate_record(
         action="rate_created",
         entity_type="indirect_rate",
         entity_id=rate.id,
-        user_id=user_id,
+        user_id=user_id,  # P2 FIX: Real user_id from AuthContext
         details={
             "pool_id": pool_id,
             "provisional_rate": provisional_rate,
             "effective_date": effective_date.isoformat(),
             "evidence": evidence
-        }
+        },
+        org_id=org_id,
+        request_id=request_id
     )
 
     return {
@@ -555,19 +637,27 @@ async def create_rate_record(
 async def list_rates(
     pool_type: Optional[PoolType] = None,
     fiscal_year: Optional[int] = None,
-    status: Optional[RateStatus] = None
+    rate_status: Optional[RateStatus] = None,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     List indirect rates (READ-ONLY)
+
+    P0 SECURITY: Only returns rates for pools belonging to caller's org.
     """
-    rates = list(_rates.values())
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter by org_id FIRST
+    # Rates are linked to pools, so we filter rates whose pool belongs to the caller's org
+    org_pool_ids = {pool_id for pool_id, pool in _pools.items() if pool.org_id == org_id}
+    rates = [r for r in _rates.values() if r.pool_id in org_pool_ids]
 
     if pool_type:
         rates = [r for r in rates if r.pool_type == pool_type]
     if fiscal_year:
         rates = [r for r in rates if r.fiscal_year == fiscal_year]
-    if status:
-        rates = [r for r in rates if r.status == status]
+    if rate_status:
+        rates = [r for r in rates if r.status == rate_status]
 
     return [
         {
@@ -583,18 +673,25 @@ async def list_rates(
 
 @router.post("/costs/{cost_id}/review", response_model=dict)
 async def review_cost_allowability(
+    request: Request,
     cost_id: str,
     allowability: CostAllowability,
     far_citation: str,
     review_notes: str,
     evidence: dict,
-    reviewer_id: str = "system"
+    ctx: AuthContext = Depends(require_govcon_access)  # P2 FIX: Use AuthContext instead of reviewer_id="system"
 ):
     """
     Review and classify cost allowability (REQUIRES EVIDENCE)
 
     Per FAR 31.201, costs must be classified as allowable/unallowable.
+
+    P2 FIX: Uses AuthContext instead of reviewer_id="system".
     """
+    reviewer_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
     if cost_id not in _costs:
         raise HTTPException(status_code=404, detail="Cost not found")
 
@@ -604,10 +701,13 @@ async def review_cost_allowability(
     cost.allowability = allowability
     cost.far_citation = far_citation
     cost.reviewed_at = datetime.utcnow()
-    cost.reviewed_by = reviewer_id
+    cost.reviewed_by = reviewer_id  # P2 FIX: Real user_id from AuthContext
 
-    # Update pool totals if changed
-    pool = next((p for p in _pools.values() if p.pool_type == cost.pool_type), None)
+    # Update pool totals if changed - only for pools belonging to this org
+    pool = next(
+        (p for p in _pools.values() if p.pool_type == cost.pool_type and p.org_id == org_id),
+        None
+    )
     if pool:
         if old_allowability == CostAllowability.ALLOWABLE:
             pool.allowable_costs -= cost.amount
@@ -623,14 +723,16 @@ async def review_cost_allowability(
         action="cost_allowability_reviewed",
         entity_type="indirect_cost",
         entity_id=cost_id,
-        user_id=reviewer_id,
+        user_id=reviewer_id,  # P2 FIX: Real user_id from AuthContext
         details={
             "old_allowability": old_allowability.value,
             "new_allowability": allowability.value,
             "far_citation": far_citation,
             "review_notes": review_notes,
             "evidence": evidence
-        }
+        },
+        org_id=org_id,
+        request_id=request_id
     )
 
     return {
@@ -648,12 +750,18 @@ async def review_cost_allowability(
 @router.get("/audit-trail", response_model=List[dict])
 async def get_indirect_audit_trail(
     pool_id: Optional[str] = None,
-    fiscal_year: Optional[int] = None
+    fiscal_year: Optional[int] = None,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Get immutable audit trail for indirect costs (READ-ONLY)
+
+    P0 SECURITY: Only returns audit entries for caller's organization.
     """
-    trail = _audit_log.copy()
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter by org_id FIRST
+    trail = [e for e in _audit_log if e.get("org_id") == org_id]
 
     if pool_id:
         trail = [

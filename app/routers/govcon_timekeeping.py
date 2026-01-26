@@ -130,6 +130,7 @@ class TimeEntry(BaseModel):
 class Timesheet(BaseModel):
     """Weekly timesheet"""
     id: str = Field(default_factory=lambda: str(uuid4()))
+    org_id: str = Field(..., description="Organization ID - REQUIRED for multi-tenant isolation")
     employee_id: str
     employee_name: str
     week_start: date = Field(..., description="Monday of the week")
@@ -228,6 +229,54 @@ def _log_audit(
     return entry
 
 
+def _require_timesheet_org_ownership(
+    timesheet_id: str,
+    ctx_org_id: str,
+    user_id: str,
+    request_id: str
+) -> Timesheet:
+    """
+    P0 SECURITY: Verify org ownership before any access.
+
+    CANONICAL LAW: Multi-tenant isolation
+    - Resource MUST belong to caller's org
+    - Logs unauthorized access attempts
+    - Returns 403 on mismatch, 404 if not found
+    """
+    if timesheet_id not in _timesheets:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+
+    timesheet = _timesheets[timesheet_id]
+
+    # P0 SECURITY: Verify org ownership
+    if timesheet.org_id != ctx_org_id:
+        # Log unauthorized access attempt
+        _log_audit(
+            action="unauthorized_access_blocked",
+            entity_type="timesheet",
+            entity_id=timesheet_id,
+            user_id=user_id,
+            details={
+                "reason": "org_mismatch",
+                "attempted_org": ctx_org_id,
+                "resource_org": timesheet.org_id,
+                "canonical_law": "multi_tenant_isolation"
+            },
+            org_id=ctx_org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ORG_ACCESS_DENIED",
+                "message": "Resource does not belong to your organization",
+                "canonical_law": "multi_tenant_isolation"
+            }
+        )
+
+    return timesheet
+
+
 def _compute_totals(timesheet: Timesheet) -> Timesheet:
     """Compute timesheet totals"""
     total = sum(e.hours for e in timesheet.entries)
@@ -253,14 +302,21 @@ def _compute_totals(timesheet: Timesheet) -> Timesheet:
 
 @router.get("/timesheets", response_model=List[dict])
 async def list_timesheets(
+    request: Request,
     employee_id: Optional[str] = None,
     status: Optional[TimesheetStatus] = None,
-    week_start: Optional[date] = None
+    week_start: Optional[date] = None,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     List timesheets (READ-ONLY, advisory)
+
+    P0 SECURITY: Only returns timesheets belonging to caller's org.
     """
-    timesheets = list(_timesheets.values())
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter by org_id FIRST
+    timesheets = [t for t in _timesheets.values() if t.org_id == org_id]
 
     if employee_id:
         timesheets = [t for t in timesheets if t.employee_id == employee_id]
@@ -283,14 +339,23 @@ async def list_timesheets(
 
 
 @router.get("/timesheets/{timesheet_id}", response_model=dict)
-async def get_timesheet(timesheet_id: str):
+async def get_timesheet(
+    request: Request,
+    timesheet_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get timesheet by ID (READ-ONLY)
-    """
-    if timesheet_id not in _timesheets:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
 
-    timesheet = _compute_totals(_timesheets[timesheet_id])
+    P0 SECURITY: Requires org ownership verification.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    timesheet = _require_timesheet_org_ownership(
+        timesheet_id, ctx["org_id"], ctx["user_id"], request_id
+    )
+    timesheet = _compute_totals(timesheet)
 
     return {
         "timesheet": timesheet.dict(),
@@ -331,10 +396,12 @@ async def create_timesheet(
 
     week_end = week_start + timedelta(days=6)
 
-    # Check for duplicate
+    org_id = ctx["org_id"]
+
+    # Check for duplicate (P0 SECURITY: org-scoped)
     existing = [
         t for t in _timesheets.values()
-        if t.employee_id == employee_id and t.week_start == week_start
+        if t.org_id == org_id and t.employee_id == employee_id and t.week_start == week_start
     ]
     if existing:
         raise HTTPException(
@@ -343,6 +410,7 @@ async def create_timesheet(
         )
 
     timesheet = Timesheet(
+        org_id=org_id,  # P0 SECURITY: Store org ownership
         employee_id=employee_id,
         employee_name=employee_name,
         week_start=week_start,
@@ -383,11 +451,15 @@ async def add_time_entry(
 ):
     """
     Add a time entry to a timesheet
-    """
-    if timesheet_id not in _timesheets:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
 
-    timesheet = _timesheets[timesheet_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    timesheet = _require_timesheet_org_ownership(
+        timesheet_id, ctx["org_id"], ctx["user_id"], request_id
+    )
 
     if timesheet.status not in [TimesheetStatus.DRAFT, TimesheetStatus.REJECTED]:
         raise HTTPException(
@@ -424,7 +496,6 @@ async def add_time_entry(
     timesheet.entries.append(time_entry)
     _entries[time_entry.id] = time_entry
 
-    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     _log_audit(
         action="time_entry_added",
         entity_type="time_entry",
@@ -457,20 +528,55 @@ async def add_time_entry(
     }
 
 
+class TimesheetSubmitRequest(BaseModel):
+    """Submit timesheet request - requires evidence per DCAA compliance"""
+    evidence: dict = Field(..., description="Evidence of work performed (required for compliance)")
+    attestation: bool = Field(..., description="Attestation that entries are accurate")
+
+
 @router.post("/timesheets/{timesheet_id}/submit", response_model=dict)
 async def submit_timesheet(
     request: Request,
     timesheet_id: str,
+    submit_request: TimesheetSubmitRequest,
     ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Submit timesheet for approval (MANUAL ACTION)
-    """
-    if timesheet_id not in _timesheets:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
 
-    timesheet = _timesheets[timesheet_id]
+    P0 SECURITY: Requires org ownership verification.
+    P1 COMPLIANCE: Requires evidence and attestation.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    timesheet = _require_timesheet_org_ownership(
+        timesheet_id, ctx["org_id"], ctx["user_id"], request_id
+    )
+
     before_status = timesheet.status.value
+
+    # P1 COMPLIANCE: Validate evidence is non-empty
+    if not submit_request.evidence or len(submit_request.evidence) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "EVIDENCE_REQUIRED",
+                "message": "Non-empty evidence is required for timesheet submission",
+                "canonical_law": "evidence_required"
+            }
+        )
+
+    # P1 COMPLIANCE: Require attestation
+    if not submit_request.attestation:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "ATTESTATION_REQUIRED",
+                "message": "Attestation that entries are accurate is required",
+                "canonical_law": "evidence_required"
+            }
+        )
 
     if timesheet.status != TimesheetStatus.DRAFT:
         raise HTTPException(
@@ -497,8 +603,8 @@ async def submit_timesheet(
     timesheet.status = TimesheetStatus.SUBMITTED
     timesheet.submitted_at = datetime.utcnow()
     timesheet.submitted_by = ctx["user_id"]
+    timesheet.evidence = submit_request.evidence  # P1 COMPLIANCE: Store submission evidence
 
-    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     _log_audit(
         action="timesheet_submitted",
         entity_type="timesheet",
@@ -506,7 +612,9 @@ async def submit_timesheet(
         user_id=ctx["user_id"],
         details={
             "total_hours": timesheet.total_hours,
-            "direct_hours": timesheet.direct_hours
+            "direct_hours": timesheet.direct_hours,
+            "evidence": submit_request.evidence,  # P1 COMPLIANCE: Log evidence
+            "attestation": submit_request.attestation
         },
         org_id=ctx["org_id"],
         request_id=request_id,
@@ -526,24 +634,47 @@ async def submit_timesheet(
     }
 
 
+class TimesheetApprovalRequest(BaseModel):
+    """Approval request - requires non-empty evidence per DCAA compliance"""
+    evidence: dict = Field(..., description="Approval evidence (required, must be non-empty)")
+    review_notes: Optional[str] = Field(None, description="Optional reviewer notes")
+
+
 @router.post("/timesheets/{timesheet_id}/approve", response_model=dict)
 async def approve_timesheet(
     request: Request,
     timesheet_id: str,
-    approval_evidence: dict,
+    approval_request: TimesheetApprovalRequest,
     ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Approve a timesheet (MANUAL SUPERVISOR ACTION)
 
     DCAA requires supervisor review and approval.
-    """
-    if timesheet_id not in _timesheets:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
 
-    timesheet = _timesheets[timesheet_id]
-    before_status = timesheet.status.value
+    P0 SECURITY: Requires org ownership verification.
+    P1 COMPLIANCE: Requires non-empty evidence.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     approver_id = ctx["user_id"]
+
+    # P1 COMPLIANCE: Validate evidence is non-empty
+    if not approval_request.evidence or len(approval_request.evidence) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "EVIDENCE_REQUIRED",
+                "message": "Non-empty approval evidence is required for timesheet approval",
+                "canonical_law": "evidence_required"
+            }
+        )
+
+    # P0 SECURITY: Verify org ownership
+    timesheet = _require_timesheet_org_ownership(
+        timesheet_id, ctx["org_id"], ctx["user_id"], request_id
+    )
+
+    before_status = timesheet.status.value
 
     if timesheet.status != TimesheetStatus.SUBMITTED:
         raise HTTPException(
@@ -561,9 +692,8 @@ async def approve_timesheet(
     timesheet.status = TimesheetStatus.APPROVED
     timesheet.approved_at = datetime.utcnow()
     timesheet.approved_by = approver_id
-    timesheet.evidence = approval_evidence
+    timesheet.evidence = approval_request.evidence  # P1 COMPLIANCE: Store approval evidence
 
-    request_id = getattr(request.state, "request_id", None) or str(uuid4())
     _log_audit(
         action="timesheet_approved",
         entity_type="timesheet",
@@ -572,7 +702,8 @@ async def approve_timesheet(
         details={
             "employee_id": timesheet.employee_id,
             "total_hours": timesheet.total_hours,
-            "approval_evidence": approval_evidence
+            "approval_evidence": approval_request.evidence,
+            "review_notes": approval_request.review_notes
         },
         org_id=ctx["org_id"],
         request_id=request_id,
@@ -604,14 +735,17 @@ async def correct_timesheet(
     CRITICAL: Lock-after-submit is ENFORCED.
     Submitted/Approved timesheets are IMMUTABLE.
     Admin unlock endpoint required for exceptional corrections.
-    """
-    if timesheet_id not in _timesheets:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
 
-    timesheet = _timesheets[timesheet_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
     user_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    timesheet = _require_timesheet_org_ownership(
+        timesheet_id, org_id, user_id, request_id
+    )
 
     # CRITICAL: Lock-after-submit - FAIL CLOSED (Canonical Law)
     # Once submitted or approved, timesheets are IMMUTABLE
@@ -763,33 +897,57 @@ async def correct_timesheet(
 
 
 @router.get("/timesheets/{timesheet_id}/audit-trail", response_model=List[dict])
-async def get_timesheet_audit_trail(timesheet_id: str):
+async def get_timesheet_audit_trail(
+    request: Request,
+    timesheet_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get immutable audit trail for a timesheet (READ-ONLY)
+
+    P0 SECURITY: Requires org ownership verification.
     """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Verify org ownership before returning audit trail
+    _require_timesheet_org_ownership(
+        timesheet_id, org_id, ctx["user_id"], request_id
+    )
+
+    # P0 SECURITY: Filter by org_id FIRST, then by entity_id (defense in depth)
     trail = [
         entry for entry in _audit_log
-        if entry["entity_id"] == timesheet_id or
-           entry.get("details", {}).get("timesheet_id") == timesheet_id
+        if entry.get("org_id") == org_id and (
+            entry["entity_id"] == timesheet_id or
+            entry.get("details", {}).get("timesheet_id") == timesheet_id
+        )
     ]
     return trail
 
 
 @router.get("/labor-distribution", response_model=dict)
 async def get_labor_distribution(
+    request: Request,
     start_date: date,
     end_date: date,
-    contract_id: Optional[str] = None
+    contract_id: Optional[str] = None,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     Get labor distribution report for DCAA compliance
 
     Shows labor hours by contract, category, and employee.
+
+    P0 SECURITY: Only returns data for caller's organization.
     """
-    # Filter timesheets by date range
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter by org_id FIRST, then by date range
     relevant_timesheets = [
         t for t in _timesheets.values()
-        if t.status == TimesheetStatus.APPROVED and
+        if t.org_id == org_id and  # P0 SECURITY: org isolation
+           t.status == TimesheetStatus.APPROVED and
            t.week_start >= start_date and t.week_end <= end_date
     ]
 
@@ -868,15 +1026,18 @@ async def admin_unlock_timesheet(
     - Should be followed by re-approval after correction
 
     This is the ONLY way to correct a locked timesheet per canonical laws.
-    """
-    if timesheet_id not in _timesheets:
-        raise HTTPException(status_code=404, detail="Timesheet not found")
 
-    timesheet = _timesheets[timesheet_id]
-    previous_status = timesheet.status
+    P0 SECURITY: Requires org ownership verification.
+    """
     admin_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    timesheet = _require_timesheet_org_ownership(
+        timesheet_id, org_id, admin_id, request_id
+    )
+    previous_status = timesheet.status
 
     # Only unlock if actually locked
     if timesheet.status not in [TimesheetStatus.SUBMITTED, TimesheetStatus.APPROVED]:

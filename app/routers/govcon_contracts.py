@@ -101,6 +101,7 @@ class CLIN(BaseModel):
 class Contract(BaseModel):
     """Government Contract Model"""
     id: str = Field(default_factory=lambda: str(uuid4()))
+    org_id: str = Field(..., description="Organization ID - REQUIRED for multi-tenant isolation")
     contract_number: str = Field(..., description="Contract number (e.g., W91CRB-23-C-0001)")
     contract_type: ContractType
     status: ContractStatus = ContractStatus.DRAFT
@@ -264,24 +265,79 @@ def _log_audit(
     return entry
 
 
+def _require_contract_org_ownership(
+    contract_id: str,
+    ctx_org_id: str,
+    user_id: str,
+    request_id: str
+) -> Contract:
+    """
+    P0 SECURITY: Verify org ownership before any access.
+
+    CANONICAL LAW: Multi-tenant isolation
+    - Resource MUST belong to caller's org
+    - Logs unauthorized access attempts
+    - Returns 403 on mismatch, 404 if not found
+    """
+    if contract_id not in _contracts:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    contract = _contracts[contract_id]
+
+    # P0 SECURITY: Verify org ownership
+    if contract.org_id != ctx_org_id:
+        # Log unauthorized access attempt
+        _log_audit(
+            action="unauthorized_access_blocked",
+            entity_type="contract",
+            entity_id=contract_id,
+            user_id=user_id,
+            details={
+                "reason": "org_mismatch",
+                "attempted_org": ctx_org_id,
+                "resource_org": contract.org_id,
+                "canonical_law": "multi_tenant_isolation"
+            },
+            org_id=ctx_org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ORG_ACCESS_DENIED",
+                "message": "Resource does not belong to your organization",
+                "canonical_law": "multi_tenant_isolation"
+            }
+        )
+
+    return contract
+
+
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
 
 @router.get("/", response_model=List[ContractResponse])
 async def list_contracts(
-    status: Optional[ContractStatus] = None,
-    contract_type: Optional[ContractType] = None
+    request: Request,
+    contract_status: Optional[ContractStatus] = None,
+    contract_type: Optional[ContractType] = None,
+    ctx: AuthContext = Depends(require_govcon_access)
 ):
     """
     List all contracts (READ-ONLY, advisory)
 
     Returns contracts with advisory wrapper indicating human action required for modifications.
-    """
-    contracts = list(_contracts.values())
 
-    if status:
-        contracts = [c for c in contracts if c.status == status]
+    P0 SECURITY: Only returns contracts belonging to caller's org.
+    """
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Filter by org_id FIRST
+    contracts = [c for c in _contracts.values() if c.org_id == org_id]
+
+    if contract_status:
+        contracts = [c for c in contracts if c.status == contract_status]
     if contract_type:
         contracts = [c for c in contracts if c.contract_type == contract_type]
 
@@ -289,14 +345,24 @@ async def list_contracts(
 
 
 @router.get("/{contract_id}", response_model=ContractResponse)
-async def get_contract(contract_id: str):
+async def get_contract(
+    request: Request,
+    contract_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get contract by ID (READ-ONLY, advisory)
-    """
-    if contract_id not in _contracts:
-        raise HTTPException(status_code=404, detail="Contract not found")
 
-    return ContractResponse(contract=_contracts[contract_id])
+    P0 SECURITY: Requires org ownership verification.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    contract = _require_contract_org_ownership(
+        contract_id, ctx["org_id"], ctx["user_id"], request_id
+    )
+
+    return ContractResponse(contract=contract)
 
 
 @router.post("/", response_model=ContractResponse, status_code=status.HTTP_201_CREATED)
@@ -322,6 +388,7 @@ async def create_contract(
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     contract = Contract(
+        org_id=org_id,  # P0 SECURITY: Store org ownership
         contract_number=data.contract_number,
         contract_type=data.contract_type,
         contractor_name=data.contractor_name,
@@ -386,14 +453,17 @@ async def request_modification(
     Request a contract modification (REQUIRES MANUAL APPROVAL)
 
     Creates modification in PENDING status. Cannot be auto-approved.
-    """
-    if contract_id not in _contracts:
-        raise HTTPException(status_code=404, detail="Contract not found")
 
-    contract = _contracts[contract_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
     user_id = ctx["user_id"]
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    contract = _require_contract_org_ownership(
+        contract_id, org_id, user_id, request_id
+    )
 
     # Generate mod number
     mod_count = contract.modification_count + 1
@@ -467,14 +537,22 @@ async def approve_modification(
     Approve a contract modification (MANUAL ACTION ONLY)
 
     This endpoint is called by human approvers only.
+
+    P0 SECURITY: Requires org ownership verification.
     """
+    approver_id = ctx["user_id"]
+    org_id = ctx["org_id"]
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership of contract
+    contract = _require_contract_org_ownership(
+        contract_id, org_id, approver_id, request_id
+    )
+
     if mod_id not in _modifications:
         raise HTTPException(status_code=404, detail="Modification not found")
 
     modification = _modifications[mod_id]
-    approver_id = ctx["user_id"]
-    org_id = ctx["org_id"]
-    request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
     if modification.status != ModificationStatus.PENDING:
         raise HTTPException(
@@ -483,7 +561,6 @@ async def approve_modification(
         )
 
     # Capture before state
-    contract = _contracts[contract_id]
     before_state = {
         "total_value": contract.total_value,
         "funded_value": contract.funded_value,
@@ -553,14 +630,32 @@ async def approve_modification(
 
 
 @router.get("/{contract_id}/audit-trail", response_model=dict)
-async def get_contract_audit_trail(contract_id: str):
+async def get_contract_audit_trail(
+    request: Request,
+    contract_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get immutable audit trail for a contract (READ-ONLY)
+
+    P0 SECURITY: Requires org ownership verification.
     """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    org_id = ctx["org_id"]
+
+    # P0 SECURITY: Verify org ownership before returning audit trail
+    _require_contract_org_ownership(
+        contract_id, org_id, ctx["user_id"], request_id
+    )
+
+    # P0 SECURITY: Filter by org_id FIRST, then by entity_id (defense in depth)
     trail = [
         entry for entry in _audit_log
-        if entry["entity_id"] == contract_id or
-           entry.get("details", {}).get("contract_id") == contract_id
+        if entry.get("org_id") == org_id and (
+            entry["entity_id"] == contract_id or
+            entry.get("details", {}).get("contract_id") == contract_id
+        )
     ]
     now = datetime.utcnow().isoformat()
     return {
@@ -580,14 +675,22 @@ async def get_contract_audit_trail(contract_id: str):
 
 
 @router.get("/{contract_id}/funding-status", response_model=dict)
-async def get_funding_status(contract_id: str):
+async def get_funding_status(
+    request: Request,
+    contract_id: str,
+    ctx: AuthContext = Depends(require_govcon_access)
+):
     """
     Get funding status for a contract (DCAA compliance view)
-    """
-    if contract_id not in _contracts:
-        raise HTTPException(status_code=404, detail="Contract not found")
 
-    contract = _contracts[contract_id]
+    P0 SECURITY: Requires org ownership verification.
+    """
+    request_id = getattr(request.state, "request_id", None) or str(uuid4())
+
+    # P0 SECURITY: Verify org ownership
+    contract = _require_contract_org_ownership(
+        contract_id, ctx["org_id"], ctx["user_id"], request_id
+    )
 
     total_obligated = sum(clin.obligated_amount for clin in contract.clins)
     total_expended = sum(clin.expended_amount for clin in contract.clins)
