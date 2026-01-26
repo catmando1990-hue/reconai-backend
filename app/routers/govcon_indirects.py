@@ -98,6 +98,7 @@ class CostAllowability(str, Enum):
 class IndirectCost(BaseModel):
     """Individual indirect cost entry"""
     id: str = Field(default_factory=lambda: str(uuid4()))
+    org_id: str = Field(..., description="Organization ID - REQUIRED for multi-tenant isolation")
     description: str
     amount: float
     period_start: date
@@ -280,6 +281,54 @@ def _require_pool_org_ownership(
     return pool
 
 
+def _require_cost_org_ownership(
+    cost_id: str,
+    ctx_org_id: str,
+    user_id: str,
+    request_id: str
+) -> IndirectCost:
+    """
+    P0 SECURITY: Verify org ownership of IndirectCost before any access.
+
+    CANONICAL LAW: Multi-tenant isolation
+    - Cost MUST belong to caller's org
+    - Logs unauthorized access attempts
+    - Returns 403 on mismatch, 404 if not found
+    """
+    if cost_id not in _costs:
+        raise HTTPException(status_code=404, detail="Cost not found")
+
+    cost = _costs[cost_id]
+
+    # P0 SECURITY: Verify org ownership
+    if cost.org_id != ctx_org_id:
+        # Log unauthorized access attempt
+        _log_audit(
+            action="unauthorized_access_blocked",
+            entity_type="indirect_cost",
+            entity_id=cost_id,
+            user_id=user_id,
+            details={
+                "reason": "org_mismatch",
+                "attempted_org": ctx_org_id,
+                "resource_org": cost.org_id,
+                "canonical_law": "multi_tenant_isolation"
+            },
+            org_id=ctx_org_id,
+            request_id=request_id
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "ORG_ACCESS_DENIED",
+                "message": "Resource does not belong to your organization",
+                "canonical_law": "multi_tenant_isolation"
+            }
+        )
+
+    return cost
+
+
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
@@ -338,7 +387,8 @@ async def get_pool(
     )
 
     # Get associated costs
-    pool_costs = [c for c in _costs.values() if c.pool_type == pool.pool_type]
+    # P0 SECURITY: Filter by org_id AND pool_type to prevent cross-org data leakage
+    pool_costs = [c for c in _costs.values() if c.pool_type == pool.pool_type and c.org_id == ctx["org_id"]]
 
     return {
         "pool": pool.dict(),
@@ -447,6 +497,7 @@ async def add_pool_cost(
     }
 
     indirect_cost = IndirectCost(
+        org_id=org_id,  # P0 SECURITY: Store org ownership for multi-tenant isolation
         description=cost.description,
         amount=cost.amount,
         period_start=period_start,
@@ -692,10 +743,8 @@ async def review_cost_allowability(
     org_id = ctx["org_id"]
     request_id = getattr(request.state, "request_id", None) or str(uuid4())
 
-    if cost_id not in _costs:
-        raise HTTPException(status_code=404, detail="Cost not found")
-
-    cost = _costs[cost_id]
+    # P0 SECURITY: Verify org ownership before accessing cost
+    cost = _require_cost_org_ownership(cost_id, org_id, reviewer_id, request_id)
     old_allowability = cost.allowability
 
     cost.allowability = allowability
