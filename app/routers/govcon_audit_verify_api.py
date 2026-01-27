@@ -4,9 +4,9 @@ import hashlib
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
-from app.auth_context import get_current_context
+from app.auth_context import get_current_context, AuthContext
 from app.db import get_db_connection
 from app.govcon.contract import GOVCON_CONTRACT_VERSION
 
@@ -32,14 +32,16 @@ def _compute_hash(prev_hash: Optional[str], payload: str) -> str:
 
 
 @router.get("/govcon/audit/verify")
-def govcon_audit_verify(request: Request) -> Dict[str, Any]:
+async def govcon_audit_verify(
+    request: Request,
+    ctx: AuthContext = Depends(get_current_context),
+) -> Dict[str, Any]:
     """
     Read-only hash chain verification for audit events.
 
     Canonical: read-only, fail-closed, advisory-only.
     Returns empty state if table lacks hash columns.
     """
-    ctx = get_current_context()
     request_id = getattr(request.state, "request_id", None)
     org_id = ctx.get("org_id")
 
