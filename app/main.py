@@ -80,6 +80,8 @@ from app.routers.plaid_hardening import router as plaid_hardening_router
 from app.routers.plaid_v2 import router as plaid_v2_router
 # Plaid v3 API (lifecycle-aware, canonical responses, full product support)
 from app.routers.plaid_v3 import router as plaid_v3_router
+# PHASE 7.1 — Plaid Extended Products API (Manual-Run, Org-Isolated, Audit-Logged)
+from app.routers.plaid_products import router as plaid_products_router
 from app.routers.transaction_overrides import router as transaction_overrides_router
 from app.routers.audit_api import router as audit_api_router
 from app.routers.policy_api import router as policy_api_router
@@ -362,6 +364,8 @@ app.include_router(plaid_hardening_router)
 app.include_router(plaid_v2_router)
 # Plaid v3 API (lifecycle-aware, canonical responses, full product support)
 app.include_router(plaid_v3_router)
+# PHASE 7.1 — Plaid Extended Products API (Manual-Run, Org-Isolated, Audit-Logged)
+app.include_router(plaid_products_router)
 # BUILD 4 — Controlled Write Enablement
 app.include_router(transaction_overrides_router)
 # BUILD 5 — Audit Log + Compliance Surface (Read-Only)
@@ -638,6 +642,7 @@ async def startup_event():
     print(">> PHASE 3: CFO Controls at /api/cfo/overview, /api/cfo/forecast, /api/cfo/exceptions (read-only, projections≠facts)")
     print(">> P0: Profile Completion at /api/profile/complete, /api/profile/status (atomic, idempotent, onboarding unblock)")
     print(">> PHASE 7: Audit Exports at /api/audit-exports/package (manual-run, RBAC fail-closed, org-isolated)")
+    print(">> PHASE 7.1: Plaid Products at /api/plaid/assets, /api/plaid/statements, /api/plaid/identity, /api/plaid/income, /api/plaid/investments, /api/plaid/liabilities, /api/plaid/enrich (manual-run, org-isolated)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
