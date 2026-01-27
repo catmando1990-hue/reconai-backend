@@ -202,18 +202,20 @@ async def get_signals_p1(
 
 
 # =============================================================================
-# PHASE 6: POST /api/signals/detect — MANUAL EXCEPTION DETECTION
+# PHASE 6.2: POST /api/signals/detect — MANUAL EXCEPTION DETECTION
 # =============================================================================
-# Executes deterministic exception detection rules and populates intelligence_signals
-# - MANUAL execution only (must be explicitly triggered)
+# Executes deterministic exception detection rules and APPENDS to intelligence_signals
+# - MANUAL execution only (invoked explicitly, NOT on request paths)
 # - Deterministic rules only (confidence = 1.0)
-# - Fail-closed audit logging
-# - Clears existing signals before inserting new ones (default)
+# - APPEND-ONLY writes (no dedup, no clear)
+# - Audit logging REQUIRED (exactly once per run)
 
 class DetectRequest(BaseModel):
     """Request body for detection endpoint."""
-    clear_existing: bool = True
-    rules: Optional[List[str]] = None
+    threshold: float = 10000.0
+    period_start: Optional[str] = None  # YYYY-MM-DD, required for E4
+    period_end: Optional[str] = None    # YYYY-MM-DD, required for E4
+    rules: Optional[List[str]] = None   # E1-E6, None = all
 
 
 @router.post("/signals/detect", tags=["signals", "detection"])
@@ -223,34 +225,39 @@ async def run_detection(
     organization_id: str = Depends(get_current_organization_id)
 ):
     """
-    Phase 6 Endpoint: Execute deterministic exception detection.
+    Phase 6.2 Endpoint: Execute deterministic exception detection.
 
-    MANUAL EXECUTION ONLY - This endpoint must be called explicitly.
-    It does NOT run automatically on transaction insert/update.
+    MANUAL EXECUTION ONLY — invoked explicitly (admin/tooling), NOT on request paths.
+    One invocation = one scan + one batch insert.
 
     Request Body:
-        clear_existing: If True (default), clears existing signals before inserting
-        rules: List of rule IDs to run (None = all rules)
+        threshold: Amount threshold for E3 (default: 10000)
+        period_start: Period start for E4 (YYYY-MM-DD). REQUIRED for E4.
+        period_end: Period end for E4 (YYYY-MM-DD). REQUIRED for E4.
+        rules: List of rule IDs to run (None = all E1-E6)
 
-    Available Rules:
-        - UNCATEGORIZED_TRANSACTION: Transactions with no category
-        - DUPLICATE_TRANSACTION: Same amount, date, account_id, name
-        - AMOUNT_THRESHOLD_BREACH: ABS(amount) >= $10,000
-        - OUT_OF_PERIOD_POSTING: Date outside current fiscal year
-        - MISSING_COUNTERPARTY: No linked vendor or customer
-        - NEGATIVE_BALANCE_EVENT: Running balance < 0
+    Available Rules (E1-E6 Taxonomy):
+        - E1: Uncategorized Transaction (category IS NULL OR empty)
+        - E2: Duplicate Transaction (exact match on amount, date, account_id, name)
+        - E3: Amount Threshold Breach (ABS(amount) >= threshold)
+        - E4: Out-of-Period Posting (date NOT BETWEEN period_start AND period_end)
+        - E5: Missing Counterparty (no linked vendor or customer)
+        - E6: Negative Balance Event (running balance < 0)
 
     Returns:
         organization_id: Organization scanned
         request_id: UUID for request tracing
         signals_detected: Total signals found
-        signals_inserted: Signals successfully inserted
+        signals_inserted: Signals successfully inserted (APPEND-ONLY)
         signals_by_rule: Breakdown by rule ID
+        threshold_used: Threshold value used for E3
+        period_start/period_end: Period used for E4
         errors: List of any errors encountered
         executed_at: ISO timestamp
+
+    APPEND-ONLY: Does NOT dedupe. Does NOT clear existing signals.
     """
     from app.services.exception_detection import run_exception_detection
-    from app.services.audit_service import record_audit, AuditServiceError
 
     request_id = _get_request_id(request)
 
@@ -258,8 +265,10 @@ async def run_detection(
     try:
         result = run_exception_detection(
             organization_id=organization_id,
+            threshold=body.threshold,
+            period_start=body.period_start,
+            period_end=body.period_end,
             request_id=request_id,
-            clear_existing=body.clear_existing,
             rules=body.rules
         )
     except Exception as e:
@@ -272,35 +281,7 @@ async def run_detection(
             }
         )
 
-    # Audit log the execution (fail-closed)
-    try:
-        record_audit(
-            actor="system",
-            action="exception_detection_executed",
-            entity="intelligence_signals",
-            entity_id=organization_id,
-            payload={
-                "signals_detected": result.signals_detected,
-                "signals_inserted": result.signals_inserted,
-                "signals_by_rule": result.signals_by_rule,
-                "clear_existing": body.clear_existing,
-                "rules_requested": body.rules,
-                "errors": result.errors
-            },
-            request_id=request_id
-        )
-    except AuditServiceError as e:
-        # Fail-closed: If audit fails, abort the request
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "audit_failed",
-                "detail": f"Detection succeeded but audit logging failed (fail-closed): {str(e)}",
-                "request_id": request_id,
-                "signals_detected": result.signals_detected,
-                "signals_inserted": result.signals_inserted
-            }
-        )
+    # Note: Audit logging is handled internally by run_exception_detection
 
     return {
         "organization_id": result.organization_id,
@@ -308,6 +289,9 @@ async def run_detection(
         "signals_detected": result.signals_detected,
         "signals_inserted": result.signals_inserted,
         "signals_by_rule": result.signals_by_rule,
+        "threshold_used": result.threshold_used,
+        "period_start": result.period_start,
+        "period_end": result.period_end,
         "errors": result.errors,
         "executed_at": result.executed_at
     }
@@ -316,9 +300,9 @@ async def run_detection(
 @router.get("/signals/rules", tags=["signals", "detection"])
 async def list_detection_rules():
     """
-    List available exception detection rules.
+    List available exception detection rules (E1-E6 taxonomy).
 
-    Returns metadata for each rule including title and description template.
+    Returns rule IDs and their titles.
     """
     from app.services.exception_detection import get_detection_rules
 
@@ -326,12 +310,9 @@ async def list_detection_rules():
 
     return {
         "rules": [
-            {
-                "rule_id": rule_id,
-                "title": meta["title"],
-                "description_template": meta["description_template"]
-            }
-            for rule_id, meta in rules.items()
+            {"rule_id": rule_id, "title": title}
+            for rule_id, title in rules.items()
         ],
-        "total": len(rules)
+        "total": len(rules),
+        "ruleset_version": "E1-E6 v1"
     }
