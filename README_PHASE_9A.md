@@ -540,3 +540,4 @@ To independently verify an export:
 | No compliance claims | ✅ Signing proves integrity/provenance only |
 | Graceful degradation | ✅ No key = no signing, export still works |
 | Strong typing | ✅ `IntegrityBlock` Pydantic model on `ManifestV2` |
+

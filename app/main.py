@@ -184,6 +184,8 @@ from app.routers.core_state import router as core_state_router
 from app.routers.audit_exports import router as audit_exports_router
 # PHASE 9A — Audit Export v2 API (Evidence-Grade Bundle, Manual-Run, No Plaid Calls)
 from app.routers.audit_exports_v2 import router as audit_exports_v2_router
+# PHASE 12A — GovCon Packet Presets API (Preset-Based Export, Manual-Run, No Plaid Calls)
+from app.routers.audit_export_presets_v2 import router as audit_export_presets_v2_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -514,6 +516,8 @@ app.include_router(core_state_router)
 app.include_router(audit_exports_router)
 # PHASE 9A — Audit Export v2 API (Evidence-Grade Bundle, Manual-Run, No Plaid Calls)
 app.include_router(audit_exports_v2_router)
+# PHASE 12A — GovCon Packet Presets API (Preset-Based Export, Manual-Run, No Plaid Calls)
+app.include_router(audit_export_presets_v2_router)
 
 
 @app.on_event("startup")

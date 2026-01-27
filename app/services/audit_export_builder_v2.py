@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.db import get_db_connection
-from app.schemas.audit_export_v2 import HashChainInfo, IntegrityBlock, SignatureInfo
+from app.schemas.audit_export_v2 import HashChainInfo, IntegrityBlock, PacketBlock, SignatureInfo
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +376,11 @@ def build_integrity_block(signing_result: SigningResult) -> IntegrityBlock:
 # DATA RETRIEVAL (NO PLAID CALLS - LOCAL DATA ONLY)
 # =============================================================================
 
-def get_stored_statements(organization_id: str) -> Tuple[List[StatementData], int]:
+def get_stored_statements(
+    organization_id: str,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> Tuple[List[StatementData], int]:
     """
     Retrieve stored statement records from the database.
 
@@ -384,6 +388,8 @@ def get_stored_statements(organization_id: str) -> Tuple[List[StatementData], in
 
     Args:
         organization_id: Organization to retrieve statements for
+        from_date: Optional start date filter (YYYY-MM-DD), inclusive
+        to_date: Optional end date filter (YYYY-MM-DD), inclusive
 
     Returns:
         Tuple of (statements_list, count)
@@ -393,8 +399,7 @@ def get_stored_statements(organization_id: str) -> Tuple[List[StatementData], in
     cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
+        query = """
             SELECT
                 statement_id,
                 organization_id,
@@ -405,10 +410,19 @@ def get_stored_statements(organization_id: str) -> Tuple[List[StatementData], in
                 created_at
             FROM statements
             WHERE organization_id = ?
-            ORDER BY created_at DESC
-            """,
-            (organization_id,)
-        )
+        """
+        params: List[Any] = [organization_id]
+
+        if from_date:
+            query += " AND created_at >= ?"
+            params.append(from_date)
+        if to_date:
+            query += " AND created_at <= ?"
+            params.append(to_date)
+
+        query += " ORDER BY created_at DESC"
+
+        cursor.execute(query, params)
         rows = cursor.fetchall()
 
         statements = []
@@ -435,7 +449,11 @@ def get_stored_statements(organization_id: str) -> Tuple[List[StatementData], in
         conn.close()
 
 
-def get_stored_receipts(organization_id: str) -> Tuple[List[ReceiptData], int]:
+def get_stored_receipts(
+    organization_id: str,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+) -> Tuple[List[ReceiptData], int]:
     """
     Retrieve stored receipt records from the database.
 
@@ -443,6 +461,8 @@ def get_stored_receipts(organization_id: str) -> Tuple[List[ReceiptData], int]:
 
     Args:
         organization_id: Organization to retrieve receipts for
+        from_date: Optional start date filter (YYYY-MM-DD), inclusive
+        to_date: Optional end date filter (YYYY-MM-DD), inclusive
 
     Returns:
         Tuple of (receipts_list, count)
@@ -452,8 +472,7 @@ def get_stored_receipts(organization_id: str) -> Tuple[List[ReceiptData], int]:
     cursor = conn.cursor()
 
     try:
-        cursor.execute(
-            """
+        query = """
             SELECT
                 receipt_id,
                 organization_id,
@@ -464,10 +483,19 @@ def get_stored_receipts(organization_id: str) -> Tuple[List[ReceiptData], int]:
                 created_at
             FROM receipts
             WHERE organization_id = ?
-            ORDER BY created_at DESC
-            """,
-            (organization_id,)
-        )
+        """
+        params: List[Any] = [organization_id]
+
+        if from_date:
+            query += " AND created_at >= ?"
+            params.append(from_date)
+        if to_date:
+            query += " AND created_at <= ?"
+            params.append(to_date)
+
+        query += " ORDER BY created_at DESC"
+
+        cursor.execute(query, params)
         rows = cursor.fetchall()
 
         receipts = []
@@ -640,6 +668,8 @@ def derive_liabilities_snapshot(organization_id: str) -> Dict[str, Any]:
 def build_statements_section(
     organization_id: str,
     generated_at_iso: str,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
 ) -> Tuple[bytes, Dict[str, int]]:
     """
     Build the statements section JSON.
@@ -647,12 +677,14 @@ def build_statements_section(
     Args:
         organization_id: Organization ID
         generated_at_iso: Generation timestamp (ISO format)
+        from_date: Optional start date filter (YYYY-MM-DD)
+        to_date: Optional end date filter (YYYY-MM-DD)
 
     Returns:
         Tuple of (json_bytes, counts_dict)
     """
-    statements, stmt_count = get_stored_statements(organization_id)
-    receipts, receipt_count = get_stored_receipts(organization_id)
+    statements, stmt_count = get_stored_statements(organization_id, from_date, to_date)
+    receipts, receipt_count = get_stored_receipts(organization_id, from_date, to_date)
 
     # Convert dataclasses to dicts
     statements_list = [
@@ -739,9 +771,11 @@ def build_manifest(
     counts: Dict[str, int],
     files: List[str],
     integrity: Optional[IntegrityBlock] = None,
+    packet: Optional[PacketBlock] = None,
 ) -> Tuple[bytes, bool]:
     """
-    Build the manifest.json content with GovCon/DCAA mapping and optional integrity block.
+    Build the manifest.json content with GovCon/DCAA mapping, optional integrity block,
+    and optional packet block (for preset-based exports).
 
     Args:
         org_id: Organization ID
@@ -752,6 +786,7 @@ def build_manifest(
         counts: Per-section counts
         files: List of files in the export
         integrity: Optional IntegrityBlock (Phase 11A signing metadata, strongly typed)
+        packet: Optional PacketBlock (Phase 12A preset metadata, strongly typed)
 
     Returns:
         Tuple of (JSON bytes for manifest.json, govcon_mapping_applied)
@@ -776,6 +811,8 @@ def build_manifest(
         "govcon_mapping": govcon_mapping if govcon_mapping_applied else None,
         # Phase 11A: Integrity block (strongly typed, only if signing key available)
         "integrity": integrity.model_dump() if integrity is not None else None,
+        # Phase 12A: Packet block (strongly typed, only for preset-based exports)
+        "packet": packet.model_dump() if packet is not None else None,
     }
 
     # Remove None values for cleaner JSON
@@ -825,6 +862,9 @@ def build_audit_export_v2(
     include_statements: bool = True,
     include_assets: bool = True,
     include_liabilities: bool = True,
+    packet: Optional[PacketBlock] = None,
+    statement_from_date: Optional[str] = None,
+    statement_to_date: Optional[str] = None,
 ) -> BuildResult:
     """
     Build the complete audit export v2 ZIP package.
@@ -840,6 +880,9 @@ def build_audit_export_v2(
         include_statements: Include statements section
         include_assets: Include assets section
         include_liabilities: Include liabilities section
+        packet: Optional PacketBlock for preset-based exports (Phase 12A)
+        statement_from_date: Optional start date for statement period filter (YYYY-MM-DD)
+        statement_to_date: Optional end date for statement period filter (YYYY-MM-DD)
 
     Returns:
         BuildResult with zip_buffer, manifest, file_hashes, and filename
@@ -857,7 +900,9 @@ def build_audit_export_v2(
     # STATEMENTS SECTION
     # ==========================================================================
     if include_statements:
-        stmt_json, stmt_counts = build_statements_section(organization_id, generated_at_iso)
+        stmt_json, stmt_counts = build_statements_section(
+            organization_id, generated_at_iso, statement_from_date, statement_to_date,
+        )
         file_contents["statements/statements.json"] = stmt_json
         file_hashes["statements/statements.json"] = compute_sha256(stmt_json)
         included_sections.append("statements")
@@ -937,6 +982,7 @@ def build_audit_export_v2(
         counts=section_counts,
         files=sorted(all_files),
         integrity=integrity_block,
+        packet=packet,
     )
     file_contents["manifest.json"] = manifest_json
     file_hashes["manifest.json"] = compute_sha256(manifest_json)

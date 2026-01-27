@@ -47,6 +47,10 @@ AUDIT_EVENT_EXPORT_V2_GOVCON_MAPPED = "audit_export_v2_govcon_mapped"
 AUDIT_EVENT_EXPORT_V2_SIGNED = "audit_export_v2_signed"
 AUDIT_EVENT_EXPORT_V2_SIGNATURE_VERIFIED = "audit_export_v2_signature_verified"
 
+# Phase 12A — GovCon Packet Preset events
+AUDIT_EVENT_EXPORT_PRESET_REQUESTED = "audit_export_preset_requested"
+AUDIT_EVENT_EXPORT_PRESET_GENERATED = "audit_export_preset_generated"
+
 
 class AuditServiceError(Exception):
     """Raised when audit service operation fails. MUST abort the request."""

@@ -13,7 +13,6 @@ CANONICAL LAWS:
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -37,6 +36,31 @@ class AuditExportV2Request(BaseModel):
     include_liabilities: bool = Field(
         default=True,
         description="Include liabilities section in export"
+    )
+
+    class Config:
+        frozen = True
+
+
+class PacketBlock(BaseModel):
+    """
+    Packet metadata for preset-based exports in manifest.json.
+
+    Identifies which preset was used and what sections it includes.
+    NO compliance claims or scoring.
+    """
+
+    preset: str = Field(
+        ...,
+        description="Preset identifier used for this export"
+    )
+    description: str = Field(
+        ...,
+        description="Descriptive text for the preset (no compliance claims)"
+    )
+    includes: List[str] = Field(
+        ...,
+        description="Sections included by this preset"
     )
 
     class Config:
@@ -328,6 +352,8 @@ class ManifestV2(BaseModel):
     )
     # Phase 11A: Optional integrity block (only present when signing key is available)
     integrity: Optional[IntegrityBlock] = None
+    # Phase 12A: Optional packet block (only present for preset-based exports)
+    packet: Optional[PacketBlock] = None
 
     class Config:
         frozen = True
