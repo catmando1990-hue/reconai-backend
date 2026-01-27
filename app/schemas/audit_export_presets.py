@@ -44,15 +44,18 @@ class StatementPeriod(BaseModel):
 
     from_date: str = Field(
         ...,
+        alias="from",
         description="Start date (YYYY-MM-DD) for statement period filter"
     )
     to_date: str = Field(
         ...,
+        alias="to",
         description="End date (YYYY-MM-DD) for statement period filter"
     )
 
     class Config:
         frozen = True
+        populate_by_name = True
 
 
 class PresetOptions(BaseModel):
