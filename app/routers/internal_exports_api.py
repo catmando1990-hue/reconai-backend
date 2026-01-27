@@ -26,7 +26,9 @@ from app.services.s3_exports import (
     get_cloudfront_status,
     get_export_provenance,
     get_export_by_id,
+    create_export_record,
     DEFAULT_RETENTION_DAYS,
+    STATUS_PENDING,
     STATUS_READY,
     STATUS_EXPIRED,
 )
@@ -175,14 +177,20 @@ async def preview_expired_exports(
 
 @router.get("/stats")
 async def get_export_stats(
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(20, ge=1, le=100, description="Number of exports per page"),
     ctx: AuthContext = Depends(get_current_context),
 ):
     """
-    Get export lifecycle statistics.
+    Get paginated list of exports.
 
     GET /internal/exports/stats
 
-    Returns counts by status for monitoring.
+    Query params:
+    - page: Page number (default: 1)
+    - page_size: Number of exports per page (default: 20, max: 100)
+
+    Returns paginated exports list with total count.
     """
     request_id = generate_request_id()
 
@@ -193,22 +201,48 @@ async def get_export_stats(
         from app.db import DB_PATH
 
         with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Get total count
+            count_cursor = conn.execute("SELECT COUNT(*) as total FROM s3_exports")
+            total_count = count_cursor.fetchone()["total"]
+
+            # Get paginated exports
+            offset = (page - 1) * page_size
             cursor = conn.execute(
                 """
-                SELECT status, COUNT(*) as count
+                SELECT id, org_id, user_id, s3_key, filename, file_type, size_bytes, status, created_at, completed_at, expires_at
                 FROM s3_exports
-                GROUP BY status
-                """
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (page_size, offset),
             )
             rows = cursor.fetchall()
 
-        stats = {row[0]: row[1] for row in rows}
+        exports = [
+            {
+                "id": row["id"],
+                "org_id": row["org_id"],
+                "user_id": row["user_id"],
+                "s3_key": row["s3_key"],
+                "filename": row["filename"],
+                "file_type": row["file_type"],
+                "size_bytes": row["size_bytes"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "completed_at": row["completed_at"],
+                "expires_at": row["expires_at"],
+            }
+            for row in rows
+        ]
 
         return ok(
             data={
-                "stats_by_status": stats,
-                "retention_policy_days": DEFAULT_RETENTION_DAYS,
-                "timestamp": datetime.utcnow().isoformat(),
+                "exports": exports,
+                "total_count": total_count,
+                "page": page,
+                "page_size": page_size,
             },
             request_id=request_id,
         )
@@ -223,6 +257,78 @@ async def get_export_stats(
         logger.error(f"Failed to get export stats: {e}")
         return error(
             message="Failed to get export stats",
+            request_id=request_id,
+            status_code=500,
+            details={"exception": str(e)[:200]},
+        )
+
+
+@router.post("/audit-package")
+async def create_audit_package_export(
+    ctx: AuthContext = Depends(get_current_context),
+):
+    """
+    Create an audit package export job.
+
+    POST /internal/exports/audit-package
+
+    Creates a row in the s3_exports table with status='pending' and
+    queues the export job for processing.
+
+    Returns the export_id and status.
+    """
+    request_id = generate_request_id()
+
+    try:
+        _assert_admin(ctx)
+
+        user_id = ctx.get("user_id")
+        org_id = ctx.get("organization_id")
+
+        if not org_id:
+            return error(
+                message="Organization context required",
+                request_id=request_id,
+                status_code=400,
+            )
+
+        from uuid import uuid4
+
+        # Generate export ID and S3 key
+        export_id = f"exp_{uuid4().hex[:16]}"
+        filename = f"audit-package-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+        s3_key = f"exports/org_{org_id}/user_{user_id}/export_{export_id}.zip"
+
+        # Create the export record with pending status
+        export = create_export_record(
+            org_id=org_id,
+            user_id=user_id,
+            s3_key=s3_key,
+            filename=filename,
+            file_type="application/zip",
+            status=STATUS_PENDING,
+        )
+
+        logger.info(f"Admin {user_id} created audit package export: id={export.id}, org={org_id}")
+
+        return ok(
+            data={
+                "export_id": export.id,
+                "status": STATUS_PENDING,
+            },
+            request_id=request_id,
+        )
+
+    except HTTPException as e:
+        return error(
+            message=str(e.detail) if isinstance(e.detail, str) else "Forbidden",
+            request_id=request_id,
+            status_code=e.status_code,
+        )
+    except Exception as e:
+        logger.error(f"Failed to create audit package export: {e}")
+        return error(
+            message="Failed to create audit package export",
             request_id=request_id,
             status_code=500,
             details={"exception": str(e)[:200]},
@@ -298,9 +404,12 @@ async def get_export_provenance_chain(
     - Immutable: links are INSERT-only, never modified
 
     Response:
-    - export: The export record
+    - export_id: The export ID
+    - export_type: File type of the export
+    - status: Export status
+    - created_at: Creation timestamp
     - evidence_links: List of evidence links
-    - total_evidence: Count of linked evidence records
+    - total_evidence_count: Count of linked evidence records
     """
     request_id = generate_request_id()
 
@@ -321,10 +430,12 @@ async def get_export_provenance_chain(
 
         return ok(
             data={
-                "export": export.to_dict(),
+                "export_id": export.id,
+                "export_type": export.file_type,
+                "status": export.status,
+                "created_at": export.created_at,
                 "evidence_links": [link.to_dict() for link in provenance],
-                "total_evidence": len(provenance),
-                "timestamp": datetime.utcnow().isoformat(),
+                "total_evidence_count": len(provenance),
             },
             request_id=request_id,
         )
