@@ -6,16 +6,21 @@ When DEMO_MODE is True, responses include { "mode": "demo" } to indicate
 that the data is not from real detection algorithms.
 
 Phase 5.5: GET /api/signals/p1 - Advisory-only endpoint backed by intelligence_signals
+Phase 6: POST /api/signals/detect - Manual exception detection execution
 
 CANONICAL LAWS:
 - Backend is source of truth
 - No demo data presented as real
 - Explicit lifecycle clarity
+- Deterministic detection only (no AI inference)
+- Manual execution only (no auto-run)
 """
 import os
 import uuid
+from typing import List, Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from app.auth_context import get_current_context, get_current_organization_id
 
 router = APIRouter(prefix="/api")
@@ -194,3 +199,139 @@ async def get_signals_p1(
                 "advisory": True
             }
         )
+
+
+# =============================================================================
+# PHASE 6: POST /api/signals/detect — MANUAL EXCEPTION DETECTION
+# =============================================================================
+# Executes deterministic exception detection rules and populates intelligence_signals
+# - MANUAL execution only (must be explicitly triggered)
+# - Deterministic rules only (confidence = 1.0)
+# - Fail-closed audit logging
+# - Clears existing signals before inserting new ones (default)
+
+class DetectRequest(BaseModel):
+    """Request body for detection endpoint."""
+    clear_existing: bool = True
+    rules: Optional[List[str]] = None
+
+
+@router.post("/signals/detect", tags=["signals", "detection"])
+async def run_detection(
+    request: Request,
+    body: DetectRequest = DetectRequest(),
+    organization_id: str = Depends(get_current_organization_id)
+):
+    """
+    Phase 6 Endpoint: Execute deterministic exception detection.
+
+    MANUAL EXECUTION ONLY - This endpoint must be called explicitly.
+    It does NOT run automatically on transaction insert/update.
+
+    Request Body:
+        clear_existing: If True (default), clears existing signals before inserting
+        rules: List of rule IDs to run (None = all rules)
+
+    Available Rules:
+        - UNCATEGORIZED_TRANSACTION: Transactions with no category
+        - DUPLICATE_TRANSACTION: Same amount, date, account_id, name
+        - AMOUNT_THRESHOLD_BREACH: ABS(amount) >= $10,000
+        - OUT_OF_PERIOD_POSTING: Date outside current fiscal year
+        - MISSING_COUNTERPARTY: No linked vendor or customer
+        - NEGATIVE_BALANCE_EVENT: Running balance < 0
+
+    Returns:
+        organization_id: Organization scanned
+        request_id: UUID for request tracing
+        signals_detected: Total signals found
+        signals_inserted: Signals successfully inserted
+        signals_by_rule: Breakdown by rule ID
+        errors: List of any errors encountered
+        executed_at: ISO timestamp
+    """
+    from app.services.exception_detection import run_exception_detection
+    from app.services.audit_service import record_audit, AuditServiceError
+
+    request_id = _get_request_id(request)
+
+    # Execute detection
+    try:
+        result = run_exception_detection(
+            organization_id=organization_id,
+            request_id=request_id,
+            clear_existing=body.clear_existing,
+            rules=body.rules
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "detection_execution_failed",
+                "detail": str(e),
+                "request_id": request_id
+            }
+        )
+
+    # Audit log the execution (fail-closed)
+    try:
+        record_audit(
+            actor="system",
+            action="exception_detection_executed",
+            entity="intelligence_signals",
+            entity_id=organization_id,
+            payload={
+                "signals_detected": result.signals_detected,
+                "signals_inserted": result.signals_inserted,
+                "signals_by_rule": result.signals_by_rule,
+                "clear_existing": body.clear_existing,
+                "rules_requested": body.rules,
+                "errors": result.errors
+            },
+            request_id=request_id
+        )
+    except AuditServiceError as e:
+        # Fail-closed: If audit fails, abort the request
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "audit_failed",
+                "detail": f"Detection succeeded but audit logging failed (fail-closed): {str(e)}",
+                "request_id": request_id,
+                "signals_detected": result.signals_detected,
+                "signals_inserted": result.signals_inserted
+            }
+        )
+
+    return {
+        "organization_id": result.organization_id,
+        "request_id": result.request_id,
+        "signals_detected": result.signals_detected,
+        "signals_inserted": result.signals_inserted,
+        "signals_by_rule": result.signals_by_rule,
+        "errors": result.errors,
+        "executed_at": result.executed_at
+    }
+
+
+@router.get("/signals/rules", tags=["signals", "detection"])
+async def list_detection_rules():
+    """
+    List available exception detection rules.
+
+    Returns metadata for each rule including title and description template.
+    """
+    from app.services.exception_detection import get_detection_rules
+
+    rules = get_detection_rules()
+
+    return {
+        "rules": [
+            {
+                "rule_id": rule_id,
+                "title": meta["title"],
+                "description_template": meta["description_template"]
+            }
+            for rule_id, meta in rules.items()
+        ],
+        "total": len(rules)
+    }
