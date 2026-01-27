@@ -883,6 +883,26 @@ def init_db() -> None:
             )
         """)
 
+        # 001b: Exception Resolutions (Phase 6.4 — append-only resolution tracking)
+        # Links to intelligence_signals, does NOT modify signals table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS exception_resolutions (
+                resolution_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id INTEGER NOT NULL,
+                organization_id INTEGER NOT NULL,
+                resolution_type TEXT NOT NULL CHECK (resolution_type IN ('acknowledged', 'dismissed', 'resolved', 'deferred')),
+                resolution_note TEXT,
+                resolved_by TEXT NOT NULL,
+                resolved_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (signal_id) REFERENCES intelligence_signals(signal_id),
+                FOREIGN KEY (organization_id) REFERENCES organizations(id)
+            )
+        """)
+
+        # Index for efficient resolution lookups
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_resolutions_signal ON exception_resolutions(signal_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_resolutions_org ON exception_resolutions(organization_id)")
+
         # 002: Receipts
         conn.execute("""
             CREATE TABLE IF NOT EXISTS receipts (

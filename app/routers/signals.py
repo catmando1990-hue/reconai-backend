@@ -6,7 +6,9 @@ When DEMO_MODE is True, responses include { "mode": "demo" } to indicate
 that the data is not from real detection algorithms.
 
 Phase 5.5: GET /api/signals/p1 - Advisory-only endpoint backed by intelligence_signals
-Phase 6: POST /api/signals/detect - Manual exception detection execution
+Phase 6.2: POST /api/signals/detect - Manual exception detection execution
+Phase 6.4: POST /api/signals/{id}/resolve - Append-only resolution tracking
+           GET /api/signals/{id}/resolutions - Resolution history
 
 CANONICAL LAWS:
 - Backend is source of truth
@@ -14,6 +16,7 @@ CANONICAL LAWS:
 - Explicit lifecycle clarity
 - Deterministic detection only (no AI inference)
 - Manual execution only (no auto-run)
+- Resolution tracking is APPEND-ONLY (no signal modification)
 """
 import os
 import uuid
@@ -316,3 +319,243 @@ async def list_detection_rules():
         "total": len(rules),
         "ruleset_version": "E1-E6 v1"
     }
+
+
+# =============================================================================
+# PHASE 6.4: EXCEPTION RESOLUTION TRACKING
+# =============================================================================
+# Append-only resolution tracking for exception signals
+# - Does NOT modify intelligence_signals table
+# - Does NOT add status field to signals
+# - Full audit logging on all writes
+# - Org isolation enforced
+
+VALID_RESOLUTION_TYPES = ["acknowledged", "dismissed", "resolved", "deferred"]
+
+
+class ResolveRequest(BaseModel):
+    """Request body for resolving an exception signal."""
+    resolution_type: str  # acknowledged, dismissed, resolved, deferred
+    resolution_note: Optional[str] = None
+    resolved_by: str  # User ID or identifier
+
+
+@router.post("/signals/{signal_id}/resolve", tags=["signals", "resolutions"])
+async def resolve_signal(
+    signal_id: int,
+    request: Request,
+    body: ResolveRequest,
+    organization_id: str = Depends(get_current_organization_id)
+):
+    """
+    Phase 6.4 Endpoint: Record a resolution for an exception signal.
+
+    APPEND-ONLY — Does NOT modify the original signal.
+    Creates a new row in exception_resolutions table.
+
+    Path Parameters:
+        signal_id: The signal to resolve
+
+    Request Body:
+        resolution_type: One of 'acknowledged', 'dismissed', 'resolved', 'deferred'
+        resolution_note: Optional explanation or context
+        resolved_by: User ID or identifier of person resolving
+
+    Returns:
+        resolution_id: ID of the created resolution record
+        signal_id: The signal that was resolved
+        request_id: UUID for request tracing
+
+    Security:
+        - Signal must belong to the authenticated organization
+        - Resolution is append-only (does not modify signal)
+    """
+    from app.db import get_db_connection
+    from app.services.audit_store import AuditEventInput, insert_audit_event
+
+    request_id = _get_request_id(request)
+
+    # Validate resolution_type
+    if body.resolution_type not in VALID_RESOLUTION_TYPES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_resolution_type",
+                "detail": f"resolution_type must be one of: {', '.join(VALID_RESOLUTION_TYPES)}",
+                "request_id": request_id
+            }
+        )
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Verify signal exists and belongs to this organization (org isolation)
+        cursor.execute(
+            "SELECT signal_id FROM intelligence_signals WHERE signal_id = ? AND organization_id = ?",
+            (signal_id, organization_id)
+        )
+        signal_row = cursor.fetchone()
+
+        if not signal_row:
+            conn.close()
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "signal_not_found",
+                    "detail": f"Signal {signal_id} not found or does not belong to this organization",
+                    "request_id": request_id
+                }
+            )
+
+        # Insert resolution (APPEND-ONLY)
+        cursor.execute(
+            """
+            INSERT INTO exception_resolutions (
+                signal_id,
+                organization_id,
+                resolution_type,
+                resolution_note,
+                resolved_by,
+                resolved_at
+            ) VALUES (?, ?, ?, ?, ?, datetime('now'))
+            """,
+            (signal_id, organization_id, body.resolution_type, body.resolution_note, body.resolved_by)
+        )
+        conn.commit()
+
+        resolution_id = cursor.lastrowid
+        conn.close()
+
+        # Audit logging (REQUIRED)
+        try:
+            audit_input = AuditEventInput(
+                actor_id=body.resolved_by,
+                event_type="exception_resolution_created",
+                entity_type="exception_resolutions",
+                entity_id=str(resolution_id),
+                payload={
+                    "signal_id": signal_id,
+                    "organization_id": organization_id,
+                    "resolution_type": body.resolution_type,
+                    "resolution_note": body.resolution_note,
+                    "request_id": request_id
+                }
+            )
+            insert_audit_event(audit_input)
+        except Exception as audit_error:
+            # Log but don't fail the request (resolution already committed)
+            pass
+
+        return {
+            "resolution_id": resolution_id,
+            "signal_id": signal_id,
+            "resolution_type": body.resolution_type,
+            "request_id": request_id
+        }
+
+    except Exception as e:
+        conn.close()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "resolution_failed",
+                "detail": str(e),
+                "request_id": request_id
+            }
+        )
+
+
+@router.get("/signals/{signal_id}/resolutions", tags=["signals", "resolutions"])
+async def get_signal_resolutions(
+    signal_id: int,
+    request: Request,
+    organization_id: str = Depends(get_current_organization_id)
+):
+    """
+    Phase 6.4 Endpoint: Get all resolutions for an exception signal.
+
+    READ-ONLY — Returns resolution history for a signal.
+
+    Path Parameters:
+        signal_id: The signal to get resolutions for
+
+    Returns:
+        items: List of resolution records (newest first)
+        signal_id: The queried signal
+        request_id: UUID for request tracing
+
+    Security:
+        - Signal must belong to the authenticated organization
+    """
+    from app.db import get_db_connection
+
+    request_id = _get_request_id(request)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Verify signal exists and belongs to this organization (org isolation)
+        cursor.execute(
+            "SELECT signal_id FROM intelligence_signals WHERE signal_id = ? AND organization_id = ?",
+            (signal_id, organization_id)
+        )
+        signal_row = cursor.fetchone()
+
+        if not signal_row:
+            conn.close()
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "signal_not_found",
+                    "detail": f"Signal {signal_id} not found or does not belong to this organization",
+                    "request_id": request_id
+                }
+            )
+
+        # Get all resolutions for this signal (newest first)
+        cursor.execute(
+            """
+            SELECT
+                resolution_id,
+                resolution_type,
+                resolution_note,
+                resolved_by,
+                resolved_at
+            FROM exception_resolutions
+            WHERE signal_id = ? AND organization_id = ?
+            ORDER BY resolved_at DESC
+            """,
+            (signal_id, organization_id)
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        items = []
+        for row in rows:
+            items.append({
+                "resolution_id": row[0],
+                "resolution_type": row[1],
+                "resolution_note": row[2],
+                "resolved_by": row[3],
+                "resolved_at": row[4]
+            })
+
+        return {
+            "items": items,
+            "signal_id": signal_id,
+            "total": len(items),
+            "request_id": request_id
+        }
+
+    except Exception as e:
+        conn.close()
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "resolutions_fetch_failed",
+                "detail": str(e),
+                "request_id": request_id
+            }
+        )
