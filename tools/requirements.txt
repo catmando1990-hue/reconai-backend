@@ -1,0 +1,5 @@
+# ReconAI Offline Export Verifier — Dependencies
+#
+# Only required for Ed25519 signature verification.
+# If verifying unsigned exports, no dependencies are needed.
+cryptography>=42.0.0
