@@ -55,6 +55,62 @@ DATA_SOURCES = {
     "liabilities": "derived_from_transactions",
 }
 
+# =============================================================================
+# GOVCON / DCAA MAPPING (Phase 10A)
+# =============================================================================
+# Static, versioned mapping that classifies exported evidence without interpretation.
+# NO inference, NO scoring, NO compliance claims.
+
+GOVCON_MAPPING_VERSION = "2024.1"
+GOVCON_MAPPING_STANDARD = "DCAA"
+
+# Static section mappings - only included if section is present in export
+GOVCON_SECTION_MAPPINGS = {
+    "statements": {
+        "dcaa_refs": [
+            "SF 1408 – Accounting System Adequacy",
+            "FAR 31.201-2",
+        ],
+        "description": "Source financial statements used as primary accounting evidence.",
+    },
+    "assets": {
+        "dcaa_refs": [
+            "SF 1408 – Financial Capability",
+            "FAR 9.104-1",
+        ],
+        "description": "Point-in-time asset snapshots demonstrating financial responsibility.",
+    },
+    "liabilities": {
+        "dcaa_refs": [
+            "SF 1408 – Financial Capability",
+            "FAR 31.201-3",
+        ],
+        "description": "Reported obligations relevant to financial condition and risk.",
+    },
+}
+
+
+def build_govcon_mapping(included_sections: List[str]) -> Dict[str, Any]:
+    """
+    Build the static GovCon/DCAA mapping for included sections only.
+
+    Args:
+        included_sections: List of section names included in the export
+
+    Returns:
+        GovCon mapping dict (only includes mappings for present sections)
+    """
+    sections = {}
+    for section_name in included_sections:
+        if section_name in GOVCON_SECTION_MAPPINGS:
+            sections[section_name] = GOVCON_SECTION_MAPPINGS[section_name]
+
+    return {
+        "standard": GOVCON_MAPPING_STANDARD,
+        "version": GOVCON_MAPPING_VERSION,
+        "sections": sections,
+    }
+
 
 # =============================================================================
 # DATA CLASSES
@@ -100,6 +156,7 @@ class BuildResult:
     manifest: Dict[str, Any]
     file_hashes: Dict[str, str]
     filename: str
+    govcon_mapping_applied: bool = False  # Phase 10A: Track if GovCon mapping was injected
 
 
 # =============================================================================
@@ -498,9 +555,9 @@ def build_manifest(
     included_sections: List[str],
     counts: Dict[str, int],
     files: List[str],
-) -> bytes:
+) -> Tuple[bytes, bool]:
     """
-    Build the manifest.json content.
+    Build the manifest.json content with GovCon/DCAA mapping.
 
     Args:
         org_id: Organization ID
@@ -512,8 +569,12 @@ def build_manifest(
         files: List of files in the export
 
     Returns:
-        JSON bytes for manifest.json
+        Tuple of (JSON bytes for manifest.json, govcon_mapping_applied)
     """
+    # Build GovCon mapping for included sections only
+    govcon_mapping = build_govcon_mapping(included_sections)
+    govcon_mapping_applied = len(govcon_mapping.get("sections", {})) > 0
+
     manifest = {
         "manifest_version": MANIFEST_VERSION,
         "org_id": org_id,
@@ -526,9 +587,14 @@ def build_manifest(
         "export_type": EXPORT_TYPE,
         "data_sources": DATA_SOURCES,
         "compliance_notes": COMPLIANCE_NOTES,
+        # Phase 10A: GovCon/DCAA static mapping (only if sections present)
+        "govcon_mapping": govcon_mapping if govcon_mapping_applied else None,
     }
 
-    return json.dumps(manifest, indent=2, default=str).encode("utf-8")
+    # Remove None values for cleaner JSON
+    manifest = {k: v for k, v in manifest.items() if v is not None}
+
+    return json.dumps(manifest, indent=2, default=str).encode("utf-8"), govcon_mapping_applied
 
 
 def build_hashes(
@@ -631,9 +697,9 @@ def build_audit_export_v2(
         section_counts["liabilities_accounts"] = liab_count
 
     # ==========================================================================
-    # MANIFEST
+    # MANIFEST (with GovCon/DCAA mapping - Phase 10A)
     # ==========================================================================
-    manifest_json = build_manifest(
+    manifest_json, govcon_mapping_applied = build_manifest(
         org_id=organization_id,
         user_id=user_id,
         request_id=request_id,
@@ -675,6 +741,7 @@ def build_audit_export_v2(
         manifest=manifest_data,
         file_hashes=file_hashes,
         filename=filename,
+        govcon_mapping_applied=govcon_mapping_applied,
     )
 
 

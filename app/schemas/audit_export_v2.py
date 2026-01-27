@@ -154,6 +154,60 @@ class LiabilitiesSection(BaseModel):
 
 
 # =============================================================================
+# GOVCON / DCAA MAPPING MODELS (Phase 10A)
+# =============================================================================
+
+class GovConSectionMapping(BaseModel):
+    """
+    Static DCAA reference mapping for a single export section.
+
+    NO inference, NO compliance claims - purely descriptive references.
+    """
+
+    dcaa_refs: List[str] = Field(
+        ...,
+        description="Static list of DCAA/FAR references applicable to this section"
+    )
+    description: str = Field(
+        ...,
+        description="Descriptive text explaining section relevance (no compliance claims)"
+    )
+
+    class Config:
+        frozen = True
+
+
+class GovConMapping(BaseModel):
+    """
+    Static, versioned GovCon / DCAA mapping for audit export manifest.
+
+    CANONICAL CONSTRAINTS:
+    - Static mapping only (no dynamic logic)
+    - Versioned explicitly
+    - NO inference, NO scoring, NO compliance claims
+    - Included only if corresponding section is present
+
+    This mapping classifies exported evidence without interpretation.
+    """
+
+    standard: str = Field(
+        default="DCAA",
+        description="Compliance standard (always DCAA for GovCon)"
+    )
+    version: str = Field(
+        ...,
+        description="Mapping version (e.g., '2024.1')"
+    )
+    sections: Dict[str, GovConSectionMapping] = Field(
+        ...,
+        description="Per-section DCAA reference mappings (only for included sections)"
+    )
+
+    class Config:
+        frozen = True
+
+
+# =============================================================================
 # MANIFEST AND HASHES MODELS
 # =============================================================================
 

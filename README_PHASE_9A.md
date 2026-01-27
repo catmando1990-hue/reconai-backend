@@ -1,10 +1,12 @@
-# Phase 9A — Audit Export v2 Backend
+# Phase 9A + 10A — Audit Export v2 Backend
 
 Evidence-Grade Financial Export Bundle for compliance and audit purposes.
 
 ## Overview
 
 Phase 9A implements a new `POST /api/audit-exports/v2` endpoint that generates comprehensive audit packages containing statements, asset snapshots, and liabilities data as a streamed ZIP file.
+
+**Phase 10A** extends the manifest with a static, versioned GovCon/DCAA mapping that classifies exported evidence without interpretation.
 
 ### Key Features
 
@@ -159,7 +161,85 @@ audit-export-{org_id}-{utc_timestamp}.zip
     "This export uses locally stored data only.",
     "No live Plaid API calls were made during export generation.",
     "For authoritative financial data, use the respective Plaid product endpoints."
-  ]
+  ],
+  "govcon_mapping": {
+    "standard": "DCAA",
+    "version": "2024.1",
+    "sections": {
+      "statements": {
+        "dcaa_refs": [
+          "SF 1408 – Accounting System Adequacy",
+          "FAR 31.201-2"
+        ],
+        "description": "Source financial statements used as primary accounting evidence."
+      },
+      "assets": {
+        "dcaa_refs": [
+          "SF 1408 – Financial Capability",
+          "FAR 9.104-1"
+        ],
+        "description": "Point-in-time asset snapshots demonstrating financial responsibility."
+      },
+      "liabilities": {
+        "dcaa_refs": [
+          "SF 1408 – Financial Capability",
+          "FAR 31.201-3"
+        ],
+        "description": "Reported obligations relevant to financial condition and risk."
+      }
+    }
+  }
+}
+```
+
+---
+
+## Phase 10A: GovCon/DCAA Mapping
+
+### Overview
+
+The `govcon_mapping` field in `manifest.json` provides a static, versioned classification of exported evidence according to DCAA and FAR references.
+
+### Key Properties
+
+- **Static Mapping** — Hardcoded constant, no dynamic logic
+- **Versioned** — Explicit version string (e.g., "2024.1")
+- **Conditional Inclusion** — Only includes mappings for sections present in the export
+- **No Inference** — Purely descriptive references, no compliance claims
+
+### Mapping Structure
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `standard` | string | Always "DCAA" |
+| `version` | string | Mapping version (e.g., "2024.1") |
+| `sections` | object | Per-section DCAA references |
+
+### Section Mappings
+
+| Section | DCAA References | Description |
+|---------|-----------------|-------------|
+| `statements` | SF 1408 – Accounting System Adequacy, FAR 31.201-2 | Source financial statements used as primary accounting evidence |
+| `assets` | SF 1408 – Financial Capability, FAR 9.104-1 | Point-in-time asset snapshots demonstrating financial responsibility |
+| `liabilities` | SF 1408 – Financial Capability, FAR 31.201-3 | Reported obligations relevant to financial condition and risk |
+
+### Conditional Logic
+
+The `govcon_mapping` field is **only included** if at least one section is present in the export. Each section mapping is only included if that section was requested and included.
+
+**Example: Export with only statements:**
+```json
+{
+  "govcon_mapping": {
+    "standard": "DCAA",
+    "version": "2024.1",
+    "sections": {
+      "statements": {
+        "dcaa_refs": ["SF 1408 – Accounting System Adequacy", "FAR 31.201-2"],
+        "description": "Source financial statements used as primary accounting evidence."
+      }
+    }
+  }
 }
 ```
 
@@ -173,8 +253,21 @@ audit-export-{org_id}-{utc_timestamp}.zip
 | `audit_export_v2_downloaded` | Export streamed to client |
 | `audit_export_v2_access_denied` | Permission denied (403) |
 | `audit_export_v2_preview` | Preview endpoint accessed |
+| `audit_export_v2_govcon_mapped` | GovCon/DCAA mapping injected into manifest (Phase 10A) |
 
 All events are logged to the append-only `audit_events` table with hash chaining.
+
+### GovCon Mapping Event Payload
+
+The `audit_export_v2_govcon_mapped` event includes:
+```json
+{
+  "org_id": "org_123",
+  "mapping_standard": "DCAA",
+  "mapping_version": "2024.1",
+  "mapped_sections": ["statements", "assets", "liabilities"]
+}
+```
 
 ---
 
@@ -198,6 +291,7 @@ All events are logged to the append-only `audit_events` table with hash chaining
 
 ## Verification Checklist
 
+### Phase 9A
 - [ ] Endpoint streams ZIP bytes (no temp files)
 - [ ] All data sourced from existing Phase 7.1/8 stores
 - [ ] manifest.json includes version "v2"
@@ -208,6 +302,16 @@ All events are logged to the append-only `audit_events` table with hash chaining
 - [ ] Audit events logged for all operations
 - [ ] No automation introduced (no cron, no background workers)
 - [ ] No new Plaid API calls
+
+### Phase 10A
+- [ ] `govcon_mapping` field present in manifest.json
+- [ ] Mapping is static (no dynamic logic)
+- [ ] Version is explicit ("2024.1")
+- [ ] Only included sections have mappings
+- [ ] No compliance scoring or claims
+- [ ] `audit_export_v2_govcon_mapped` event logged when mapping applied
+- [ ] No frontend changes
+- [ ] No new endpoints added
 
 ### Manual Testing
 
@@ -289,3 +393,15 @@ If issues are discovered:
 | Org isolation | ✅ All queries include organization_id |
 | Audit logging | ✅ All operations logged |
 | Structured errors | ✅ request_id in all responses |
+
+### Phase 10A Additional Compliance
+
+| Requirement | Status |
+|-------------|--------|
+| Static mapping only | ✅ Hardcoded constant, no dynamic logic |
+| No compliance scoring | ✅ Descriptive references only |
+| No inference | ✅ No automated recommendations |
+| Conditional inclusion | ✅ Only maps present sections |
+| Versioned explicitly | ✅ "2024.1" version string |
+| No frontend changes | ✅ Backend only |
+| No new endpoints | ✅ Extends existing manifest only |

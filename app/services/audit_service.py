@@ -40,6 +40,9 @@ AUDIT_EVENT_EXPORT_V2_DOWNLOADED = "audit_export_v2_downloaded"
 AUDIT_EVENT_EXPORT_V2_ACCESS_DENIED = "audit_export_v2_access_denied"
 AUDIT_EVENT_EXPORT_V2_PREVIEW = "audit_export_v2_preview"
 
+# Phase 10A — GovCon/DCAA Manifest Mapping event
+AUDIT_EVENT_EXPORT_V2_GOVCON_MAPPED = "audit_export_v2_govcon_mapped"
+
 
 class AuditServiceError(Exception):
     """Raised when audit service operation fails. MUST abort the request."""

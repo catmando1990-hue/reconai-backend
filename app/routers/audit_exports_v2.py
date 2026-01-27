@@ -60,6 +60,8 @@ AUDIT_EVENT_V2_GENERATED = "audit_export_v2_generated"
 AUDIT_EVENT_V2_DOWNLOADED = "audit_export_v2_downloaded"
 AUDIT_EVENT_V2_ACCESS_DENIED = "audit_export_v2_access_denied"
 AUDIT_EVENT_V2_PREVIEW = "audit_export_v2_preview"
+# Phase 10A: GovCon/DCAA mapping event
+AUDIT_EVENT_V2_GOVCON_MAPPED = "audit_export_v2_govcon_mapped"
 
 
 # =============================================================================
@@ -279,6 +281,24 @@ async def generate_audit_export_v2(
         manifest_hash = result.file_hashes.get("manifest.json", "")
 
         # ==========================================================================
+        # AUDIT LOG: GOVCON MAPPING (Phase 10A) - only if mapping was injected
+        # ==========================================================================
+        if result.govcon_mapping_applied:
+            govcon_mapping = result.manifest.get("govcon_mapping", {})
+            _log_audit_event(
+                user_id=user_id,
+                organization_id=organization_id,
+                event_type=AUDIT_EVENT_V2_GOVCON_MAPPED,
+                request_id=request_id,
+                payload={
+                    "org_id": organization_id,
+                    "mapping_standard": govcon_mapping.get("standard"),
+                    "mapping_version": govcon_mapping.get("version"),
+                    "mapped_sections": list(govcon_mapping.get("sections", {}).keys()),
+                }
+            )
+
+        # ==========================================================================
         # AUDIT LOG: DOWNLOAD
         # ==========================================================================
         _log_audit_event(
@@ -292,6 +312,7 @@ async def generate_audit_export_v2(
                 "manifest_hash": manifest_hash[:16] + "..." if manifest_hash else None,
                 "included_sections": result.manifest.get("included_sections", []),
                 "counts": result.manifest.get("counts", {}),
+                "govcon_mapping_applied": result.govcon_mapping_applied,
             }
         )
 
