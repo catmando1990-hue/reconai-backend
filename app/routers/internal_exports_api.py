@@ -15,6 +15,8 @@ SECURITY:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from typing import Optional as OptionalType
 from datetime import datetime
 import logging
 
@@ -263,14 +265,23 @@ async def get_export_stats(
         )
 
 
+class AuditPackageRequest(BaseModel):
+    """Request body for creating an audit package export."""
+    organization_id: OptionalType[str] = None
+
+
 @router.post("/audit-package")
 async def create_audit_package_export(
+    body: AuditPackageRequest = None,
     ctx: AuthContext = Depends(get_current_context),
 ):
     """
     Create an audit package export job.
 
     POST /internal/exports/audit-package
+
+    Request body (optional):
+    - organization_id: Organization ID to create export for (defaults to user's org)
 
     Creates a row in the s3_exports table with status='pending' and
     queues the export job for processing.
@@ -283,11 +294,12 @@ async def create_audit_package_export(
         _assert_admin(ctx)
 
         user_id = ctx.get("user_id")
-        org_id = ctx.get("organization_id")
+        # Use body.organization_id if provided, otherwise fall back to context
+        org_id = (body.organization_id if body else None) or ctx.get("organization_id")
 
         if not org_id:
             return error(
-                message="Organization context required",
+                message="organization_id required in request body or context",
                 request_id=request_id,
                 status_code=400,
             )
