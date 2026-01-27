@@ -123,6 +123,18 @@ class InvestmentsRefreshRequest(BaseModel):
     item_id: str = Field(..., description="Plaid item ID")
 
 
+class InvestmentsHoldingsGetRequest(BaseModel):
+    """Request to get investment holdings."""
+    item_id: str = Field(..., description="Plaid item ID")
+
+
+class InvestmentsTransactionsGetRequest(BaseModel):
+    """Request to get investment transactions."""
+    item_id: str = Field(..., description="Plaid item ID")
+    start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
+    end_date: str = Field(..., description="End date (YYYY-MM-DD)")
+
+
 class LiabilitiesGetRequest(BaseModel):
     """Request to get liabilities."""
     item_id: str = Field(..., description="Plaid item ID")
@@ -225,8 +237,17 @@ def _get_plaid_client():
 
 
 # =============================================================================
-# ASSET REPORTS
+# ASSET REPORTS (Phase 8B - Net Worth Snapshot, Immutable)
 # =============================================================================
+
+# Snapshot disclaimer - MUST be included in all asset report responses
+ASSET_REPORT_DISCLAIMER = (
+    "This snapshot reflects account balances at the time of generation "
+    "and is not a live balance."
+)
+
+ASSET_REPORT_LABEL = "Historical Asset Snapshot (Plaid)"
+
 
 @router.post("/assets/report/create", tags=["plaid-products", "assets"])
 async def create_asset_report(
@@ -236,17 +257,24 @@ async def create_asset_report(
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
 ) -> JSONResponse:
     """
-    Create a Plaid Asset Report.
+    Create a Plaid Asset Report (Point-in-Time Net Worth Snapshot).
 
     MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO AUTO-REGENERATION - each report is a unique snapshot.
+    NO BACKGROUND REFRESH - snapshot is immutable once created.
+    NO MUTATION - Plaid source data is never modified.
 
-    Asset reports provide point-in-time snapshots of account balances and
-    transaction history for underwriting and verification purposes.
+    SNAPSHOT SEMANTICS:
+        - Asset reports are IMMUTABLE point-in-time snapshots
+        - Once created, contents cannot be changed
+        - Suitable for SBA and GovCon underwriting use cases
+        - Report reflects balances at generation time, NOT current balances
 
     Security:
-        - Requires authenticated user context
+        - Requires authenticated user context (get_current_context)
         - Org-isolated: Only creates report for owned items
-        - Audit logged
+        - Audit logged: asset_report_created event
+        - Structured error envelope with request_id
     """
     from plaid.model.asset_report_create_request import AssetReportCreateRequest as PlaidAssetReportCreateRequest
     from plaid.model.asset_report_create_request_options import AssetReportCreateRequestOptions
@@ -255,27 +283,29 @@ async def create_asset_report(
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
 
-    # Audit (FAIL-CLOSED)
+    # Get access token (ORG ISOLATION ENFORCED) - check early
+    access_token = _get_access_token_for_item(organization_id, payload.item_id)
+    if not access_token:
+        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
+
+    # Audit (FAIL-CLOSED) - asset_report_created event
     try:
         record_audit(
             actor=user_id,
-            action="plaid.assets.report.create",
-            entity="plaid",
+            action="asset_report_created",
+            entity="plaid_asset_reports",
             entity_id=organization_id,
             payload={
                 "item_id": payload.item_id,
                 "days_requested": payload.days_requested,
+                "organization_id": organization_id,
+                "snapshot_type": "net_worth",
             },
             request_id=request_id,
         )
     except AuditServiceError as e:
         logger.error(f"Audit failed for create_asset_report: {e}")
         return error_response(500, "audit_failed", "Audit recording failed", request_id)
-
-    # Get access token (ORG ISOLATION ENFORCED)
-    access_token = _get_access_token_for_item(organization_id, payload.item_id)
-    if not access_token:
-        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
 
     try:
         client = _get_plaid_client()
@@ -299,9 +329,12 @@ async def create_asset_report(
                 data={
                     "asset_report_token": response.asset_report_token,
                     "asset_report_id": response.asset_report_id,
-                    "request_id": response.request_id,
+                    "plaid_request_id": response.request_id,
+                    "snapshot_type": "net_worth",
+                    "label": ASSET_REPORT_LABEL,
+                    "disclaimer": ASSET_REPORT_DISCLAIMER,
                 },
-                message="Asset report creation initiated",
+                message="Asset report snapshot creation initiated. Report will be immutable once generated.",
                 request_id=request_id,
             ),
             headers={"X-Request-ID": request_id},
@@ -309,7 +342,81 @@ async def create_asset_report(
 
     except Exception as e:
         logger.error(f"Asset report creation failed: {e}")
-        return error_response(500, "plaid_error", "Failed to create asset report", request_id)
+        return error_response(500, "plaid_error", "Failed to create asset report snapshot", request_id)
+
+
+def _extract_snapshot_data(report: dict) -> dict:
+    """
+    Extract and normalize asset report data for snapshot presentation.
+
+    Returns structured data with:
+    - report_id
+    - generated_at (UTC)
+    - institution_summaries
+    - account_balances
+    - total_assets (simple sum of current balances)
+
+    NO inferred values. NO projections. NO "current balance" language.
+    """
+    report_id = report.get("asset_report_id")
+    generated_at = report.get("date_generated")  # UTC timestamp from Plaid
+
+    # Extract institution summaries
+    institution_summaries = []
+    account_balances = []
+    total_assets = 0.0
+
+    items = report.get("items", [])
+    for item in items:
+        institution = item.get("institution_name", "Unknown Institution")
+        institution_id = item.get("institution_id")
+
+        institution_summary = {
+            "institution_name": institution,
+            "institution_id": institution_id,
+            "accounts_count": 0,
+            "total_balance": 0.0,
+        }
+
+        accounts = item.get("accounts", [])
+        for account in accounts:
+            account_id = account.get("account_id")
+            account_name = account.get("name", "Unknown Account")
+            account_type = account.get("type")
+            account_subtype = account.get("subtype")
+
+            # Get balance snapshot - use historical_balances if available, else balances
+            balances = account.get("balances", {})
+            balance_current = balances.get("current") or 0.0
+
+            # For historical accuracy, check historical_balances array
+            historical = account.get("historical_balances", [])
+            if historical and len(historical) > 0:
+                # Use most recent historical balance (first in array)
+                balance_current = historical[0].get("current") or balance_current
+
+            account_balances.append({
+                "account_id": account_id,
+                "account_name": account_name,
+                "account_type": account_type,
+                "account_subtype": account_subtype,
+                "balance_at_snapshot": balance_current,
+                "institution_name": institution,
+            })
+
+            institution_summary["accounts_count"] += 1
+            institution_summary["total_balance"] += balance_current
+            total_assets += balance_current
+
+        institution_summaries.append(institution_summary)
+
+    return {
+        "report_id": report_id,
+        "generated_at": generated_at,
+        "institution_summaries": institution_summaries,
+        "account_balances": account_balances,
+        "total_assets": round(total_assets, 2),
+    }
 
 
 @router.post("/assets/report/get", tags=["plaid-products", "assets"])
@@ -320,13 +427,32 @@ async def get_asset_report(
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
 ) -> JSONResponse:
     """
-    Get a completed Plaid Asset Report.
+    Get a completed Plaid Asset Report (Immutable Net Worth Snapshot).
 
     MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO REGENERATION - returns the exact snapshot as generated.
+    NO BACKGROUND REFRESH - data is immutable.
+    NO MUTATION - Plaid source data is never modified.
+
+    SNAPSHOT SEMANTICS:
+        - Returns IMMUTABLE point-in-time snapshot
+        - Contents reflect balances at generation time
+        - generated_at timestamp is preserved and surfaced
+        - total_assets is a simple sum (NO inferred values, NO projections)
+
+    Response includes:
+        - report_id: Unique identifier for this snapshot
+        - generated_at: UTC timestamp when snapshot was created
+        - institution_summaries: Summary per financial institution
+        - account_balances: Balance per account at snapshot time
+        - total_assets: Simple sum of all account balances
+        - label: "Historical Asset Snapshot (Plaid)"
+        - disclaimer: Immutability and point-in-time notice
 
     Security:
-        - Requires authenticated user context
-        - Audit logged
+        - Requires authenticated user context (get_current_context)
+        - Audit logged: asset_report_viewed event
+        - Structured error envelope with request_id
     """
     from plaid.model.asset_report_get_request import AssetReportGetRequest as PlaidAssetReportGetRequest
 
@@ -334,15 +460,16 @@ async def get_asset_report(
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
 
-    # Audit (FAIL-CLOSED)
+    # Audit (FAIL-CLOSED) - asset_report_viewed event
     try:
         record_audit(
             actor=user_id,
-            action="plaid.assets.report.get",
-            entity="plaid",
+            action="asset_report_viewed",
+            entity="plaid_asset_reports",
             entity_id=organization_id,
             payload={
                 "asset_report_token": payload.asset_report_token[:20] + "...",  # Truncate for security
+                "organization_id": organization_id,
             },
             request_id=request_id,
         )
@@ -359,18 +486,39 @@ async def get_asset_report(
 
         response = client.asset_report_get(request_params)
 
-        # Convert to dict for JSON serialization
+        # Convert to dict for processing
         report_data = response.to_dict() if hasattr(response, 'to_dict') else {}
+        report = report_data.get("report", {})
+
+        # Extract and normalize snapshot data
+        snapshot = _extract_snapshot_data(report)
 
         return JSONResponse(
             status_code=200,
             content=build_response(
                 success=True,
                 data={
-                    "report": report_data.get("report", {}),
+                    # Snapshot metadata
+                    "label": ASSET_REPORT_LABEL,
+                    "disclaimer": ASSET_REPORT_DISCLAIMER,
+                    "snapshot_type": "net_worth",
+
+                    # Core snapshot data
+                    "report_id": snapshot["report_id"],
+                    "generated_at": snapshot["generated_at"],
+                    "total_assets": snapshot["total_assets"],
+
+                    # Detailed breakdowns
+                    "institution_summaries": snapshot["institution_summaries"],
+                    "account_balances": snapshot["account_balances"],
+
+                    # Warnings from Plaid (if any)
                     "warnings": report_data.get("warnings", []),
+
+                    # Full raw report for compliance (optional use)
+                    "raw_report": report,
                 },
-                message="Asset report retrieved",
+                message="Historical asset snapshot retrieved. Data reflects balances at generation time.",
                 request_id=request_id,
             ),
             headers={"X-Request-ID": request_id},
@@ -380,8 +528,13 @@ async def get_asset_report(
         logger.error(f"Asset report get failed: {e}")
         error_msg = str(e)
         if "PRODUCT_NOT_READY" in error_msg:
-            return error_response(202, "report_pending", "Asset report is still being generated", request_id)
-        return error_response(500, "plaid_error", "Failed to get asset report", request_id)
+            return error_response(
+                202,
+                "report_pending",
+                "Asset report snapshot is still being generated by Plaid. Retry later.",
+                request_id,
+            )
+        return error_response(500, "plaid_error", "Failed to retrieve asset report snapshot", request_id)
 
 
 @router.post("/assets/report/remove", tags=["plaid-products", "assets"])
@@ -392,13 +545,20 @@ async def remove_asset_report(
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
 ) -> JSONResponse:
     """
-    Remove a Plaid Asset Report.
+    Remove a Plaid Asset Report snapshot.
 
     MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO AUTOMATION - removal must be explicitly requested.
+
+    IMPORTANT:
+        - This permanently removes the snapshot from Plaid
+        - The snapshot cannot be recovered after removal
+        - Consider audit/compliance requirements before removal
 
     Security:
-        - Requires authenticated user context
-        - Audit logged
+        - Requires authenticated user context (get_current_context)
+        - Audit logged: asset_report_removed event
+        - Structured error envelope with request_id
     """
     from plaid.model.asset_report_remove_request import AssetReportRemoveRequest as PlaidAssetReportRemoveRequest
 
@@ -406,15 +566,17 @@ async def remove_asset_report(
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
 
-    # Audit (FAIL-CLOSED)
+    # Audit (FAIL-CLOSED) - asset_report_removed event
     try:
         record_audit(
             actor=user_id,
-            action="plaid.assets.report.remove",
-            entity="plaid",
+            action="asset_report_removed",
+            entity="plaid_asset_reports",
             entity_id=organization_id,
             payload={
-                "asset_report_token": payload.asset_report_token[:20] + "...",
+                "asset_report_token": payload.asset_report_token[:20] + "...",  # Truncate for security
+                "organization_id": organization_id,
+                "removal_reason": "user_requested",
             },
             request_id=request_id,
         )
@@ -431,14 +593,18 @@ async def remove_asset_report(
 
         response = client.asset_report_remove(request_params)
 
+        logger.info(f"Asset report snapshot removed: token={payload.asset_report_token[:20]}..., user={user_id}")
+
         return JSONResponse(
             status_code=200,
             content=build_response(
                 success=True,
                 data={
                     "removed": response.removed,
+                    "label": ASSET_REPORT_LABEL,
+                    "message": "Snapshot permanently removed from Plaid",
                 },
-                message="Asset report removed",
+                message="Asset report snapshot removed successfully",
                 request_id=request_id,
             ),
             headers={"X-Request-ID": request_id},
@@ -446,12 +612,31 @@ async def remove_asset_report(
 
     except Exception as e:
         logger.error(f"Asset report remove failed: {e}")
-        return error_response(500, "plaid_error", "Failed to remove asset report", request_id)
+        return error_response(500, "plaid_error", "Failed to remove asset report snapshot", request_id)
 
 
 # =============================================================================
-# STATEMENTS
+# STATEMENTS (Phase 8A - Evidence-Grade Hardened)
 # =============================================================================
+
+def _compute_period_dates(year: int, month: int) -> tuple:
+    """
+    Compute period_start and period_end dates from year and month.
+
+    Returns:
+        Tuple of (period_start, period_end) as ISO date strings
+    """
+    import calendar
+
+    # First day of the month
+    period_start = f"{year:04d}-{month:02d}-01"
+
+    # Last day of the month
+    last_day = calendar.monthrange(year, month)[1]
+    period_end = f"{year:04d}-{month:02d}-{last_day:02d}"
+
+    return period_start, period_end
+
 
 @router.get("/statements/list", tags=["plaid-products", "statements"])
 async def list_statements(
@@ -464,11 +649,18 @@ async def list_statements(
     List available bank statements for a Plaid item.
 
     MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO CACHING - fresh data on every request.
+    NO BACKGROUND FETCH - synchronous Plaid API call only.
+    NO MUTATION - read-only operation.
 
     Security:
-        - Requires authenticated user context
+        - Requires authenticated user context (get_current_context)
         - Org-isolated: Only lists statements for owned items
-        - Audit logged
+        - Audit logged: statement_list_viewed event
+        - Structured error envelope with request_id
+
+    Response includes period_start and period_end for each statement
+    (derived from month/year) for audit evidence requirements.
     """
     from plaid.model.statements_list_request import StatementsListRequest as PlaidStatementsListRequest
 
@@ -476,14 +668,17 @@ async def list_statements(
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
 
-    # Audit (FAIL-CLOSED)
+    # Audit (FAIL-CLOSED) - statement_list_viewed event
     try:
         record_audit(
             actor=user_id,
-            action="plaid.statements.list",
-            entity="plaid",
+            action="statement_list_viewed",
+            entity="plaid_statements",
             entity_id=organization_id,
-            payload={"item_id": item_id},
+            payload={
+                "item_id": item_id,
+                "organization_id": organization_id,
+            },
             request_id=request_id,
         )
     except AuditServiceError as e:
@@ -504,17 +699,28 @@ async def list_statements(
 
         response = client.statements_list(request_params)
 
-        # Convert statements to serializable format
+        # Convert statements to serializable format with period dates
         statements = []
         if hasattr(response, 'accounts'):
             for account in response.accounts:
                 if hasattr(account, 'statements'):
                     for stmt in account.statements:
+                        month = stmt.month if hasattr(stmt, 'month') else None
+                        year = stmt.year if hasattr(stmt, 'year') else None
+
+                        # Compute period dates for audit evidence
+                        period_start = None
+                        period_end = None
+                        if month and year:
+                            period_start, period_end = _compute_period_dates(year, month)
+
                         statements.append({
                             "statement_id": stmt.statement_id if hasattr(stmt, 'statement_id') else None,
-                            "month": stmt.month if hasattr(stmt, 'month') else None,
-                            "year": stmt.year if hasattr(stmt, 'year') else None,
                             "account_id": account.account_id if hasattr(account, 'account_id') else None,
+                            "month": month,
+                            "year": year,
+                            "period_start": period_start,
+                            "period_end": period_end,
                         })
 
         return JSONResponse(
@@ -524,6 +730,7 @@ async def list_statements(
                 data={
                     "statements": statements,
                     "total": len(statements),
+                    "item_id": item_id,
                 },
                 message="Statements listed",
                 request_id=request_id,
@@ -536,75 +743,192 @@ async def list_statements(
         return error_response(500, "plaid_error", "Failed to list statements", request_id)
 
 
+def _sanitize_filename(name: str) -> str:
+    """
+    Sanitize a filename to be ZIP-safe and deterministic.
+
+    Removes/replaces characters that could cause issues in ZIP archives
+    or filesystem operations.
+    """
+    import re
+    # Replace any non-alphanumeric except dash, underscore, dot with underscore
+    sanitized = re.sub(r'[^a-zA-Z0-9\-_.]', '_', name)
+    # Collapse multiple underscores
+    sanitized = re.sub(r'_+', '_', sanitized)
+    # Remove leading/trailing underscores
+    sanitized = sanitized.strip('_')
+    return sanitized or "statement"
+
+
+def _compute_sha256(data: bytes) -> str:
+    """
+    Compute SHA-256 hash of binary data.
+
+    Returns:
+        Lowercase hex string of the hash
+    """
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
 @router.get("/statements/download", tags=["plaid-products", "statements"])
 async def download_statement(
     item_id: str,
     statement_id: str,
-    request: Request,
+    account_id: Optional[str] = None,
+    request: Request = None,
     ctx: AuthContext = Depends(get_current_context),
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
 ) -> StreamingResponse:
     """
-    Download a bank statement PDF.
+    Download a bank statement PDF with evidence-grade metadata.
 
     MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO CACHING - fresh download on every request.
+    NO BACKGROUND FETCH - synchronous Plaid API call only.
+    NO MUTATION - read-only operation, file NOT persisted unless stored by policy.
 
     Security:
-        - Requires authenticated user context
+        - Requires authenticated user context (get_current_context)
         - Org-isolated: Only downloads statements for owned items
-        - Audit logged
+        - Audit logged: statement_downloaded event
+        - Structured error envelope with request_id
+
+    Evidence Requirements:
+        - SHA-256 hash computed on PDF bytes and returned in X-SHA256-Hash header
+        - Deterministic, ZIP-safe filename
+        - Full metadata in response headers
+
+    Response Headers:
+        - X-Statement-ID: The statement identifier
+        - X-Account-ID: The account identifier (if available)
+        - X-Period-Start: Start date of statement period (YYYY-MM-DD)
+        - X-Period-End: End date of statement period (YYYY-MM-DD)
+        - X-SHA256-Hash: SHA-256 hash of PDF bytes (lowercase hex)
+        - X-Request-ID: Request trace identifier
+        - Content-Disposition: Deterministic filename
+
+    Query Parameters:
+        - item_id: Plaid item ID (required)
+        - statement_id: Statement ID from /statements/list (required)
+        - account_id: Account ID for metadata (optional, fetched if not provided)
     """
     from plaid.model.statements_download_request import StatementsDownloadRequest as PlaidStatementsDownloadRequest
+    from plaid.model.statements_list_request import StatementsListRequest as PlaidStatementsListRequest
     import io
 
     request_id = validate_request_id(x_request_id)
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
 
-    # Audit (FAIL-CLOSED)
-    try:
-        record_audit(
-            actor=user_id,
-            action="plaid.statements.download",
-            entity="plaid",
-            entity_id=organization_id,
-            payload={"item_id": item_id, "statement_id": statement_id},
-            request_id=request_id,
-        )
-    except AuditServiceError as e:
-        logger.error(f"Audit failed for download_statement: {e}")
-        raise HTTPException(status_code=500, detail="Audit recording failed")
-
-    # Get access token (ORG ISOLATION ENFORCED)
+    # Get access token (ORG ISOLATION ENFORCED) - check early before audit
     access_token = _get_access_token_for_item(organization_id, item_id)
     if not access_token:
-        raise HTTPException(status_code=404, detail="Plaid item not found or not accessible")
+        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
+
+    # Fetch statement metadata for evidence completeness
+    period_start = None
+    period_end = None
+    resolved_account_id = account_id
 
     try:
         client = _get_plaid_client()
 
-        request_params = PlaidStatementsDownloadRequest(
+        # Get statement metadata from list endpoint
+        list_params = PlaidStatementsListRequest(access_token=access_token)
+        list_response = client.statements_list(list_params)
+
+        # Find the specific statement to get metadata
+        if hasattr(list_response, 'accounts'):
+            for account in list_response.accounts:
+                if hasattr(account, 'statements'):
+                    for stmt in account.statements:
+                        if hasattr(stmt, 'statement_id') and stmt.statement_id == statement_id:
+                            resolved_account_id = account.account_id if hasattr(account, 'account_id') else account_id
+                            month = stmt.month if hasattr(stmt, 'month') else None
+                            year = stmt.year if hasattr(stmt, 'year') else None
+                            if month and year:
+                                period_start, period_end = _compute_period_dates(year, month)
+                            break
+                if period_start:
+                    break
+
+    except Exception as e:
+        logger.warning(f"Could not fetch statement metadata for {statement_id}: {e}")
+        # Continue with download even if metadata fetch fails
+
+    # Audit (FAIL-CLOSED) - statement_downloaded event with full metadata
+    try:
+        record_audit(
+            actor=user_id,
+            action="statement_downloaded",
+            entity="plaid_statements",
+            entity_id=statement_id,
+            payload={
+                "item_id": item_id,
+                "statement_id": statement_id,
+                "account_id": resolved_account_id,
+                "organization_id": organization_id,
+                "period_start": period_start,
+                "period_end": period_end,
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        logger.error(f"Audit failed for download_statement: {e}")
+        return error_response(500, "audit_failed", "Audit recording failed", request_id)
+
+    try:
+        # Download the statement PDF
+        download_params = PlaidStatementsDownloadRequest(
             access_token=access_token,
             statement_id=statement_id,
         )
 
-        response = client.statements_download(request_params)
+        response = client.statements_download(download_params)
 
-        # Response is PDF bytes
+        # Read PDF bytes
         pdf_content = response.read() if hasattr(response, 'read') else response
+
+        # Compute SHA-256 hash for evidence integrity
+        sha256_hash = _compute_sha256(pdf_content)
+
+        # Build deterministic, ZIP-safe filename
+        filename_parts = ["statement", statement_id]
+        if period_start:
+            filename_parts.append(period_start)
+        filename = _sanitize_filename("-".join(filename_parts)) + ".pdf"
+
+        # Build response headers with full evidence metadata
+        response_headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Request-ID": request_id,
+            "X-Statement-ID": statement_id,
+            "X-SHA256-Hash": sha256_hash,
+        }
+
+        # Add optional metadata headers if available
+        if resolved_account_id:
+            response_headers["X-Account-ID"] = resolved_account_id
+        if period_start:
+            response_headers["X-Period-Start"] = period_start
+        if period_end:
+            response_headers["X-Period-End"] = period_end
+
+        logger.info(
+            f"Statement downloaded: statement_id={statement_id}, "
+            f"sha256={sha256_hash[:16]}..., size={len(pdf_content)} bytes"
+        )
 
         return StreamingResponse(
             io.BytesIO(pdf_content),
             media_type="application/pdf",
-            headers={
-                "Content-Disposition": f'attachment; filename="statement-{statement_id}.pdf"',
-                "X-Request-ID": request_id,
-            }
+            headers=response_headers,
         )
 
     except Exception as e:
         logger.error(f"Statement download failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to download statement")
+        return error_response(500, "plaid_error", "Failed to download statement", request_id)
 
 
 # =============================================================================
@@ -803,7 +1127,7 @@ async def get_income(
 
 
 # =============================================================================
-# INVESTMENTS
+# INVESTMENTS (Phase 8C - Read-Only Financial Position Data)
 # =============================================================================
 
 @router.post("/investments/refresh", tags=["plaid-products", "investments"])
@@ -814,14 +1138,21 @@ async def refresh_investments(
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
 ) -> JSONResponse:
     """
-    Refresh investment holdings from Plaid.
+    Refresh investment holdings from Plaid (Manual Trigger Only).
 
     MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO BACKGROUND REFRESH - this is an explicit user-triggered action.
+    NO AUTOMATION - must be manually invoked.
+
+    Returns:
+        - refresh_status: Status of the refresh request
+        - refreshed_at: UTC timestamp of refresh initiation
 
     Security:
-        - Requires authenticated user context
+        - Requires authenticated user context (get_current_context)
         - Org-isolated: Only refreshes investments for owned items
-        - Audit logged
+        - Audit logged: investments_refreshed event
+        - Structured error envelope with request_id
     """
     from plaid.model.investments_refresh_request import InvestmentsRefreshRequest as PlaidInvestmentsRefreshRequest
 
@@ -829,24 +1160,28 @@ async def refresh_investments(
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
 
-    # Audit (FAIL-CLOSED)
+    # Get access token (ORG ISOLATION ENFORCED) - check early
+    access_token = _get_access_token_for_item(organization_id, payload.item_id)
+    if not access_token:
+        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
+
+    # Audit (FAIL-CLOSED) - investments_refreshed event
     try:
         record_audit(
             actor=user_id,
-            action="plaid.investments.refresh",
-            entity="plaid",
+            action="investments_refreshed",
+            entity="plaid_investments",
             entity_id=organization_id,
-            payload={"item_id": payload.item_id},
+            payload={
+                "item_id": payload.item_id,
+                "organization_id": organization_id,
+                "trigger": "manual",
+            },
             request_id=request_id,
         )
     except AuditServiceError as e:
         logger.error(f"Audit failed for refresh_investments: {e}")
         return error_response(500, "audit_failed", "Audit recording failed", request_id)
-
-    # Get access token (ORG ISOLATION ENFORCED)
-    access_token = _get_access_token_for_item(organization_id, payload.item_id)
-    if not access_token:
-        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
 
     try:
         client = _get_plaid_client()
@@ -856,15 +1191,19 @@ async def refresh_investments(
         )
 
         response = client.investments_refresh(request_params)
+        refreshed_at = datetime.now(timezone.utc).isoformat()
 
         return JSONResponse(
             status_code=200,
             content=build_response(
                 success=True,
                 data={
-                    "request_id": response.request_id if hasattr(response, 'request_id') else None,
+                    "refresh_status": "initiated",
+                    "refreshed_at": refreshed_at,
+                    "plaid_request_id": response.request_id if hasattr(response, 'request_id') else None,
+                    "item_id": payload.item_id,
                 },
-                message="Investment holdings refresh initiated",
+                message="Investment holdings refresh initiated. Holdings will be updated on next retrieval.",
                 request_id=request_id,
             ),
             headers={"X-Request-ID": request_id},
@@ -878,9 +1217,335 @@ async def refresh_investments(
         return error_response(500, "plaid_error", "Failed to refresh investments", request_id)
 
 
+@router.post("/investments/holdings/get", tags=["plaid-products", "investments"])
+async def get_investment_holdings(
+    payload: InvestmentsHoldingsGetRequest,
+    request: Request,
+    ctx: AuthContext = Depends(get_current_context),
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+) -> JSONResponse:
+    """
+    Get investment holdings from Plaid (Read-Only Financial Position).
+
+    MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO BACKGROUND REFRESH - synchronous Plaid API call only.
+    NO MUTATION - read-only operation.
+
+    OUTPUT RULES:
+        - Each holding includes: institution, account, security_name,
+          quantity, value, as_of timestamp
+        - NO inferred performance metrics
+        - NO projections
+
+    LANGUAGE:
+        - Uses "value as of" (not "current value")
+        - Uses "reported quantity" (not "real-time holdings")
+
+    Security:
+        - Requires authenticated user context (get_current_context)
+        - Org-isolated: Only gets holdings for owned items
+        - Audit logged: investments_holdings_viewed event
+        - Structured error envelope with request_id
+    """
+    from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest as PlaidInvestmentsHoldingsGetRequest
+
+    request_id = validate_request_id(x_request_id)
+    organization_id = ctx["org_id"]
+    user_id = ctx["user_id"]
+
+    # Get access token (ORG ISOLATION ENFORCED) - check early
+    access_token = _get_access_token_for_item(organization_id, payload.item_id)
+    if not access_token:
+        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
+
+    # Audit (FAIL-CLOSED) - investments_holdings_viewed event
+    try:
+        record_audit(
+            actor=user_id,
+            action="investments_holdings_viewed",
+            entity="plaid_investments",
+            entity_id=organization_id,
+            payload={
+                "item_id": payload.item_id,
+                "organization_id": organization_id,
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        logger.error(f"Audit failed for get_investment_holdings: {e}")
+        return error_response(500, "audit_failed", "Audit recording failed", request_id)
+
+    try:
+        client = _get_plaid_client()
+
+        request_params = PlaidInvestmentsHoldingsGetRequest(
+            access_token=access_token,
+        )
+
+        response = client.investments_holdings_get(request_params)
+
+        # Build account and security lookup maps
+        account_map = {}
+        if hasattr(response, 'accounts'):
+            for acc in (response.accounts or []):
+                acc_dict = acc.to_dict() if hasattr(acc, 'to_dict') else {}
+                account_map[acc_dict.get("account_id")] = acc_dict
+
+        security_map = {}
+        if hasattr(response, 'securities'):
+            for sec in (response.securities or []):
+                sec_dict = sec.to_dict() if hasattr(sec, 'to_dict') else {}
+                security_map[sec_dict.get("security_id")] = sec_dict
+
+        # Normalize holdings per spec
+        holdings = []
+        total_value = 0.0
+
+        if hasattr(response, 'holdings'):
+            for holding in (response.holdings or []):
+                h_dict = holding.to_dict() if hasattr(holding, 'to_dict') else {}
+
+                account_id = h_dict.get("account_id")
+                security_id = h_dict.get("security_id")
+                account_info = account_map.get(account_id, {})
+                security_info = security_map.get(security_id, {})
+
+                quantity = h_dict.get("quantity", 0)
+                value = h_dict.get("institution_value") or (quantity * (h_dict.get("institution_price") or 0))
+
+                holdings.append({
+                    "account_id": account_id,
+                    "institution": account_info.get("official_name") or account_info.get("name", "Unknown Institution"),
+                    "account_name": account_info.get("name", "Unknown Account"),
+                    "account_mask": account_info.get("mask"),
+                    "security_id": security_id,
+                    "security_name": security_info.get("name", "Unknown Security"),
+                    "security_ticker": security_info.get("ticker_symbol"),
+                    "security_type": security_info.get("type"),
+                    "quantity": quantity,
+                    "value_as_of": value,
+                    "cost_basis": h_dict.get("cost_basis"),
+                    "as_of": h_dict.get("institution_price_as_of_date"),
+                })
+
+                total_value += value or 0
+
+        return JSONResponse(
+            status_code=200,
+            content=build_response(
+                success=True,
+                data={
+                    "holdings": holdings,
+                    "total_holdings_value": round(total_value, 2),
+                    "holdings_count": len(holdings),
+                    "item_id": payload.item_id,
+                    "data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                },
+                message="Investment holdings retrieved. Values reported as of timestamps shown.",
+                request_id=request_id,
+            ),
+            headers={"X-Request-ID": request_id},
+        )
+
+    except Exception as e:
+        logger.error(f"Investments holdings get failed: {e}")
+        error_msg = str(e)
+        if "PRODUCT_NOT_ENABLED" in error_msg or "INVALID_PRODUCT" in error_msg:
+            return error_response(400, "product_not_enabled", "Investments product not enabled for this item", request_id)
+        return error_response(500, "plaid_error", "Failed to get investment holdings", request_id)
+
+
+@router.post("/investments/transactions/get", tags=["plaid-products", "investments"])
+async def get_investment_transactions(
+    payload: InvestmentsTransactionsGetRequest,
+    request: Request,
+    ctx: AuthContext = Depends(get_current_context),
+    x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+) -> JSONResponse:
+    """
+    Get investment transactions from Plaid (Read-Only, Date-Bounded).
+
+    MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO BACKGROUND REFRESH - synchronous Plaid API call only.
+    NO MUTATION - read-only operation.
+
+    OUTPUT RULES:
+        - Read-only transaction data
+        - Date-bounded (start_date to end_date)
+        - NO inferred performance metrics
+        - NO gain/loss calculations beyond raw data
+
+    Security:
+        - Requires authenticated user context (get_current_context)
+        - Org-isolated: Only gets transactions for owned items
+        - Audit logged: investments_transactions_viewed event
+        - Structured error envelope with request_id
+    """
+    from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest as PlaidInvestmentsTransactionsGetRequest
+    from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
+    from datetime import date as date_type
+
+    request_id = validate_request_id(x_request_id)
+    organization_id = ctx["org_id"]
+    user_id = ctx["user_id"]
+
+    # Validate date format
+    try:
+        start_date = date_type.fromisoformat(payload.start_date)
+        end_date = date_type.fromisoformat(payload.end_date)
+    except ValueError:
+        return error_response(400, "invalid_date", "Dates must be in YYYY-MM-DD format", request_id)
+
+    if start_date > end_date:
+        return error_response(400, "invalid_date_range", "start_date must be before or equal to end_date", request_id)
+
+    # Get access token (ORG ISOLATION ENFORCED) - check early
+    access_token = _get_access_token_for_item(organization_id, payload.item_id)
+    if not access_token:
+        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
+
+    # Audit (FAIL-CLOSED) - investments_transactions_viewed event
+    try:
+        record_audit(
+            actor=user_id,
+            action="investments_transactions_viewed",
+            entity="plaid_investments",
+            entity_id=organization_id,
+            payload={
+                "item_id": payload.item_id,
+                "organization_id": organization_id,
+                "start_date": payload.start_date,
+                "end_date": payload.end_date,
+            },
+            request_id=request_id,
+        )
+    except AuditServiceError as e:
+        logger.error(f"Audit failed for get_investment_transactions: {e}")
+        return error_response(500, "audit_failed", "Audit recording failed", request_id)
+
+    try:
+        client = _get_plaid_client()
+
+        request_params = PlaidInvestmentsTransactionsGetRequest(
+            access_token=access_token,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        response = client.investments_transactions_get(request_params)
+
+        # Build account and security lookup maps
+        account_map = {}
+        if hasattr(response, 'accounts'):
+            for acc in (response.accounts or []):
+                acc_dict = acc.to_dict() if hasattr(acc, 'to_dict') else {}
+                account_map[acc_dict.get("account_id")] = acc_dict
+
+        security_map = {}
+        if hasattr(response, 'securities'):
+            for sec in (response.securities or []):
+                sec_dict = sec.to_dict() if hasattr(sec, 'to_dict') else {}
+                security_map[sec_dict.get("security_id")] = sec_dict
+
+        # Normalize transactions (read-only, no performance metrics)
+        transactions = []
+        if hasattr(response, 'investment_transactions'):
+            for tx in (response.investment_transactions or []):
+                tx_dict = tx.to_dict() if hasattr(tx, 'to_dict') else {}
+
+                account_id = tx_dict.get("account_id")
+                security_id = tx_dict.get("security_id")
+                account_info = account_map.get(account_id, {})
+                security_info = security_map.get(security_id, {})
+
+                transactions.append({
+                    "transaction_id": tx_dict.get("investment_transaction_id"),
+                    "account_id": account_id,
+                    "account_name": account_info.get("name", "Unknown Account"),
+                    "security_id": security_id,
+                    "security_name": security_info.get("name", "Unknown Security"),
+                    "security_ticker": security_info.get("ticker_symbol"),
+                    "date": tx_dict.get("date"),
+                    "type": tx_dict.get("type"),
+                    "subtype": tx_dict.get("subtype"),
+                    "quantity": tx_dict.get("quantity"),
+                    "price": tx_dict.get("price"),
+                    "amount": tx_dict.get("amount"),
+                    "fees": tx_dict.get("fees"),
+                    "name": tx_dict.get("name"),
+                })
+
+        return JSONResponse(
+            status_code=200,
+            content=build_response(
+                success=True,
+                data={
+                    "transactions": transactions,
+                    "transactions_count": len(transactions),
+                    "date_range": {
+                        "start_date": payload.start_date,
+                        "end_date": payload.end_date,
+                    },
+                    "item_id": payload.item_id,
+                    "data_retrieved_at": datetime.now(timezone.utc).isoformat(),
+                },
+                message="Investment transactions retrieved for specified date range.",
+                request_id=request_id,
+            ),
+            headers={"X-Request-ID": request_id},
+        )
+
+    except Exception as e:
+        logger.error(f"Investments transactions get failed: {e}")
+        error_msg = str(e)
+        if "PRODUCT_NOT_ENABLED" in error_msg or "INVALID_PRODUCT" in error_msg:
+            return error_response(400, "product_not_enabled", "Investments product not enabled for this item", request_id)
+        return error_response(500, "plaid_error", "Failed to get investment transactions", request_id)
+
+
 # =============================================================================
-# LIABILITIES
+# LIABILITIES (Phase 8C - Read-Only Financial Position Data)
 # =============================================================================
+
+def _normalize_liability_item(raw: dict, account_map: dict, liability_type: str) -> dict:
+    """
+    Normalize a liability item to standard output format.
+
+    Returns dict with:
+    - institution, account_name, account_mask, reported_balance,
+    - interest_rate (if present), as_of timestamp
+
+    NO risk scoring. NO recommendations. NO payoff projections.
+    """
+    account_id = raw.get("account_id")
+    account_info = account_map.get(account_id, {})
+
+    # Get balance - use last_payment_amount or current balance
+    reported_balance = None
+    if liability_type == "credit_card":
+        reported_balance = raw.get("last_statement_balance") or raw.get("is_overdue")
+    elif liability_type == "student_loan":
+        reported_balance = raw.get("outstanding_interest_amount")
+        if raw.get("loan_status", {}).get("type") == "repayment":
+            reported_balance = raw.get("last_payment_amount")
+    elif liability_type == "mortgage":
+        reported_balance = raw.get("current_late_fee") or raw.get("escrow_balance")
+
+    # Fall back to account balance if available
+    if reported_balance is None:
+        reported_balance = account_info.get("balances", {}).get("current")
+
+    return {
+        "account_id": account_id,
+        "institution": account_info.get("official_name") or account_info.get("name", "Unknown Institution"),
+        "account_name": account_info.get("name", "Unknown Account"),
+        "account_mask": account_info.get("mask"),
+        "reported_balance": reported_balance,
+        "interest_rate": raw.get("aprs", [{}])[0].get("apr_percentage") if raw.get("aprs") else raw.get("interest_rate_percentage"),
+        "as_of": raw.get("last_payment_date") or raw.get("last_statement_issue_date"),
+        "liability_type": liability_type,
+    }
+
 
 @router.get("/liabilities/get", tags=["plaid-products", "liabilities"])
 async def get_liabilities(
@@ -890,14 +1555,29 @@ async def get_liabilities(
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
 ) -> JSONResponse:
     """
-    Get credit card and loan liabilities from Plaid.
+    Get credit card and loan liabilities from Plaid (Read-Only Financial Position).
 
     MANUAL EXECUTION ONLY - invoked explicitly by authorized users.
+    NO BACKGROUND REFRESH - synchronous Plaid API call only.
+    NO MUTATION - read-only operation.
+
+    OUTPUT RULES:
+        - Data grouped by: credit_cards, student_loans, mortgages, other_loans
+        - Each item includes: institution, account_name/mask, reported_balance,
+          interest_rate (if present), as_of timestamp
+        - NO risk scoring
+        - NO recommendations
+        - NO payoff projections
+
+    LANGUAGE:
+        - Uses "reported balance" (not "current balance")
+        - Uses "as of" timestamps (not "real-time" or "live")
 
     Security:
-        - Requires authenticated user context
+        - Requires authenticated user context (get_current_context)
         - Org-isolated: Only gets liabilities for owned items
-        - Audit logged
+        - Audit logged: liabilities_viewed event
+        - Structured error envelope with request_id
     """
     from plaid.model.liabilities_get_request import LiabilitiesGetRequest as PlaidLiabilitiesGetRequest
 
@@ -905,24 +1585,27 @@ async def get_liabilities(
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
 
-    # Audit (FAIL-CLOSED)
+    # Get access token (ORG ISOLATION ENFORCED) - check early
+    access_token = _get_access_token_for_item(organization_id, item_id)
+    if not access_token:
+        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
+
+    # Audit (FAIL-CLOSED) - liabilities_viewed event
     try:
         record_audit(
             actor=user_id,
-            action="plaid.liabilities.get",
-            entity="plaid",
+            action="liabilities_viewed",
+            entity="plaid_liabilities",
             entity_id=organization_id,
-            payload={"item_id": item_id},
+            payload={
+                "item_id": item_id,
+                "organization_id": organization_id,
+            },
             request_id=request_id,
         )
     except AuditServiceError as e:
         logger.error(f"Audit failed for get_liabilities: {e}")
         return error_response(500, "audit_failed", "Audit recording failed", request_id)
-
-    # Get access token (ORG ISOLATION ENFORCED)
-    access_token = _get_access_token_for_item(organization_id, item_id)
-    if not access_token:
-        return error_response(404, "item_not_found", "Plaid item not found or not accessible", request_id)
 
     try:
         client = _get_plaid_client()
@@ -933,44 +1616,71 @@ async def get_liabilities(
 
         response = client.liabilities_get(request_params)
 
-        # Convert liabilities to serializable format
-        liabilities_data = {}
+        # Build account lookup map for institution/name resolution
+        account_map = {}
+        if hasattr(response, 'accounts'):
+            for acc in (response.accounts or []):
+                acc_dict = acc.to_dict() if hasattr(acc, 'to_dict') else {}
+                account_map[acc_dict.get("account_id")] = acc_dict
+
+        # Normalize and group liabilities per spec
+        credit_cards = []
+        student_loans = []
+        mortgages = []
+        other_loans = []
+
         if hasattr(response, 'liabilities'):
             liabilities = response.liabilities
 
             # Credit cards
-            if hasattr(liabilities, 'credit'):
-                liabilities_data["credit"] = [
-                    cc.to_dict() if hasattr(cc, 'to_dict') else {}
-                    for cc in (liabilities.credit or [])
-                ]
+            if hasattr(liabilities, 'credit') and liabilities.credit:
+                for cc in liabilities.credit:
+                    raw = cc.to_dict() if hasattr(cc, 'to_dict') else {}
+                    credit_cards.append(_normalize_liability_item(raw, account_map, "credit_card"))
 
             # Student loans
-            if hasattr(liabilities, 'student'):
-                liabilities_data["student"] = [
-                    sl.to_dict() if hasattr(sl, 'to_dict') else {}
-                    for sl in (liabilities.student or [])
-                ]
+            if hasattr(liabilities, 'student') and liabilities.student:
+                for sl in liabilities.student:
+                    raw = sl.to_dict() if hasattr(sl, 'to_dict') else {}
+                    student_loans.append(_normalize_liability_item(raw, account_map, "student_loan"))
 
             # Mortgages
-            if hasattr(liabilities, 'mortgage'):
-                liabilities_data["mortgage"] = [
-                    m.to_dict() if hasattr(m, 'to_dict') else {}
-                    for m in (liabilities.mortgage or [])
-                ]
+            if hasattr(liabilities, 'mortgage') and liabilities.mortgage:
+                for m in liabilities.mortgage:
+                    raw = m.to_dict() if hasattr(m, 'to_dict') else {}
+                    mortgages.append(_normalize_liability_item(raw, account_map, "mortgage"))
+
+        # Calculate simple totals (no inferred analytics)
+        total_credit_cards = sum(c.get("reported_balance") or 0 for c in credit_cards)
+        total_student_loans = sum(s.get("reported_balance") or 0 for s in student_loans)
+        total_mortgages = sum(m.get("reported_balance") or 0 for m in mortgages)
+        total_other = sum(o.get("reported_balance") or 0 for o in other_loans)
 
         return JSONResponse(
             status_code=200,
             content=build_response(
                 success=True,
                 data={
-                    "liabilities": liabilities_data,
-                    "accounts": [
-                        acc.to_dict() if hasattr(acc, 'to_dict') else {}
-                        for acc in (response.accounts or [])
-                    ] if hasattr(response, 'accounts') else [],
+                    # Grouped liabilities per spec
+                    "credit_cards": credit_cards,
+                    "student_loans": student_loans,
+                    "mortgages": mortgages,
+                    "other_loans": other_loans,
+
+                    # Simple totals (no projections, no risk scores)
+                    "totals": {
+                        "credit_cards": round(total_credit_cards, 2),
+                        "student_loans": round(total_student_loans, 2),
+                        "mortgages": round(total_mortgages, 2),
+                        "other_loans": round(total_other, 2),
+                        "all_liabilities": round(total_credit_cards + total_student_loans + total_mortgages + total_other, 2),
+                    },
+
+                    # Metadata
+                    "item_id": item_id,
+                    "data_retrieved_at": datetime.now(timezone.utc).isoformat(),
                 },
-                message="Liabilities retrieved",
+                message="Liabilities retrieved. Reported balances reflect data as of timestamps shown.",
                 request_id=request_id,
             ),
             headers={"X-Request-ID": request_id},
