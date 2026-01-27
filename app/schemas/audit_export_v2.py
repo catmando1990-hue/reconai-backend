@@ -14,7 +14,7 @@ CANONICAL LAWS:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -247,7 +247,7 @@ class ManifestV2(BaseModel):
     - request_id: Request trace identifier
     """
 
-    manifest_version: str = Field(default="v2", const=True)
+    manifest_version: Literal["v2"] = "v2"
     org_id: str
     generated_at: str
     generated_by: str
@@ -281,7 +281,7 @@ class HashesV2(BaseModel):
     """
 
     generated_at: str
-    algorithm: str = Field(default="SHA-256", const=True)
+    algorithm: Literal["SHA-256"] = "SHA-256"
     file_hashes: Dict[str, str]
     contents_order: List[str]
     contents_order_hash: str

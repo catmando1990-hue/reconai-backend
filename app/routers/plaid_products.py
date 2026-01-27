@@ -493,6 +493,30 @@ async def get_asset_report(
         # Extract and normalize snapshot data
         snapshot = _extract_snapshot_data(report)
 
+        # Build frontend-compatible accounts with balances: { available, current }
+        report_accounts = []
+        for ab in snapshot.get("account_balances", []):
+            report_accounts.append({
+                "account_id": ab.get("account_id"),
+                "name": ab.get("account_name"),
+                "type": ab.get("account_type"),
+                "subtype": ab.get("account_subtype"),
+                "institution_name": ab.get("institution_name"),
+                "balances": {
+                    "available": ab.get("balance_at_snapshot"),
+                    "current": ab.get("balance_at_snapshot"),
+                },
+            })
+
+        # Build report object for frontend contract
+        report_obj = {
+            "report_id": snapshot["report_id"],
+            "generated_at": snapshot["generated_at"],
+            "total_assets": snapshot["total_assets"],
+            "accounts": report_accounts,
+            "institution_summaries": snapshot["institution_summaries"],
+        }
+
         return JSONResponse(
             status_code=200,
             content=build_response(
@@ -503,7 +527,10 @@ async def get_asset_report(
                     "disclaimer": ASSET_REPORT_DISCLAIMER,
                     "snapshot_type": "net_worth",
 
-                    # Core snapshot data
+                    # Frontend contract: report object with accounts
+                    "report": report_obj,
+
+                    # Core snapshot data (kept for backward compatibility)
                     "report_id": snapshot["report_id"],
                     "generated_at": snapshot["generated_at"],
                     "total_assets": snapshot["total_assets"],
@@ -1286,18 +1313,42 @@ async def get_investment_holdings(
 
         # Build account and security lookup maps
         account_map = {}
+        accounts_list = []
         if hasattr(response, 'accounts'):
             for acc in (response.accounts or []):
                 acc_dict = acc.to_dict() if hasattr(acc, 'to_dict') else {}
                 account_map[acc_dict.get("account_id")] = acc_dict
+                balances = acc_dict.get("balances", {})
+                accounts_list.append({
+                    "account_id": acc_dict.get("account_id"),
+                    "name": acc_dict.get("name"),
+                    "official_name": acc_dict.get("official_name"),
+                    "type": acc_dict.get("type"),
+                    "subtype": acc_dict.get("subtype"),
+                    "mask": acc_dict.get("mask"),
+                    "balances": {
+                        "available": balances.get("available"),
+                        "current": balances.get("current"),
+                    },
+                })
 
         security_map = {}
+        securities_list = []
         if hasattr(response, 'securities'):
             for sec in (response.securities or []):
                 sec_dict = sec.to_dict() if hasattr(sec, 'to_dict') else {}
                 security_map[sec_dict.get("security_id")] = sec_dict
+                securities_list.append({
+                    "security_id": sec_dict.get("security_id"),
+                    "name": sec_dict.get("name"),
+                    "ticker_symbol": sec_dict.get("ticker_symbol"),
+                    "type": sec_dict.get("type"),
+                    "close_price": sec_dict.get("close_price"),
+                    "close_price_as_of": sec_dict.get("close_price_as_of"),
+                    "iso_currency_code": sec_dict.get("iso_currency_code"),
+                })
 
-        # Normalize holdings per spec
+        # Normalize holdings with frontend-expected field names
         holdings = []
         total_value = 0.0
 
@@ -1311,24 +1362,27 @@ async def get_investment_holdings(
                 security_info = security_map.get(security_id, {})
 
                 quantity = h_dict.get("quantity", 0)
-                value = h_dict.get("institution_value") or (quantity * (h_dict.get("institution_price") or 0))
+                institution_price = h_dict.get("institution_price")
+                institution_value = h_dict.get("institution_value") or (quantity * (institution_price or 0))
 
                 holdings.append({
                     "account_id": account_id,
+                    "security_id": security_id,
                     "institution": account_info.get("official_name") or account_info.get("name", "Unknown Institution"),
                     "account_name": account_info.get("name", "Unknown Account"),
                     "account_mask": account_info.get("mask"),
-                    "security_id": security_id,
                     "security_name": security_info.get("name", "Unknown Security"),
                     "security_ticker": security_info.get("ticker_symbol"),
                     "security_type": security_info.get("type"),
                     "quantity": quantity,
-                    "value_as_of": value,
+                    "institution_price": institution_price,
+                    "institution_value": institution_value,
+                    "institution_price_as_of": h_dict.get("institution_price_as_of_date"),
                     "cost_basis": h_dict.get("cost_basis"),
-                    "as_of": h_dict.get("institution_price_as_of_date"),
+                    "iso_currency_code": h_dict.get("iso_currency_code"),
                 })
 
-                total_value += value or 0
+                total_value += institution_value or 0
 
         return JSONResponse(
             status_code=200,
@@ -1336,6 +1390,8 @@ async def get_investment_holdings(
                 success=True,
                 data={
                     "holdings": holdings,
+                    "securities": securities_list,
+                    "accounts": accounts_list,
                     "total_holdings_value": round(total_value, 2),
                     "holdings_count": len(holdings),
                     "item_id": payload.item_id,
@@ -1547,9 +1603,9 @@ def _normalize_liability_item(raw: dict, account_map: dict, liability_type: str)
     }
 
 
-@router.get("/liabilities/get", tags=["plaid-products", "liabilities"])
+@router.post("/liabilities/get", tags=["plaid-products", "liabilities"])
 async def get_liabilities(
-    item_id: str,
+    payload: LiabilitiesGetRequest,
     request: Request,
     ctx: AuthContext = Depends(get_current_context),
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
@@ -1584,6 +1640,7 @@ async def get_liabilities(
     request_id = validate_request_id(x_request_id)
     organization_id = ctx["org_id"]
     user_id = ctx["user_id"]
+    item_id = payload.item_id
 
     # Get access token (ORG ISOLATION ENFORCED) - check early
     access_token = _get_access_token_for_item(organization_id, item_id)
@@ -1618,16 +1675,31 @@ async def get_liabilities(
 
         # Build account lookup map for institution/name resolution
         account_map = {}
+        accounts_list = []
         if hasattr(response, 'accounts'):
             for acc in (response.accounts or []):
                 acc_dict = acc.to_dict() if hasattr(acc, 'to_dict') else {}
                 account_map[acc_dict.get("account_id")] = acc_dict
+                # Build frontend-compatible account object
+                balances = acc_dict.get("balances", {})
+                accounts_list.append({
+                    "account_id": acc_dict.get("account_id"),
+                    "name": acc_dict.get("name"),
+                    "official_name": acc_dict.get("official_name"),
+                    "type": acc_dict.get("type"),
+                    "subtype": acc_dict.get("subtype"),
+                    "mask": acc_dict.get("mask"),
+                    "balances": {
+                        "available": balances.get("available"),
+                        "current": balances.get("current"),
+                    },
+                })
 
-        # Normalize and group liabilities per spec
-        credit_cards = []
-        student_loans = []
-        mortgages = []
-        other_loans = []
+        # Normalize and group liabilities per frontend contract
+        # Frontend expects: liabilities: { credit: [], student: [], mortgage: [] }
+        credit_items = []
+        student_items = []
+        mortgage_items = []
 
         if hasattr(response, 'liabilities'):
             liabilities = response.liabilities
@@ -1636,44 +1708,45 @@ async def get_liabilities(
             if hasattr(liabilities, 'credit') and liabilities.credit:
                 for cc in liabilities.credit:
                     raw = cc.to_dict() if hasattr(cc, 'to_dict') else {}
-                    credit_cards.append(_normalize_liability_item(raw, account_map, "credit_card"))
+                    credit_items.append(_normalize_liability_item(raw, account_map, "credit_card"))
 
             # Student loans
             if hasattr(liabilities, 'student') and liabilities.student:
                 for sl in liabilities.student:
                     raw = sl.to_dict() if hasattr(sl, 'to_dict') else {}
-                    student_loans.append(_normalize_liability_item(raw, account_map, "student_loan"))
+                    student_items.append(_normalize_liability_item(raw, account_map, "student_loan"))
 
             # Mortgages
             if hasattr(liabilities, 'mortgage') and liabilities.mortgage:
                 for m in liabilities.mortgage:
                     raw = m.to_dict() if hasattr(m, 'to_dict') else {}
-                    mortgages.append(_normalize_liability_item(raw, account_map, "mortgage"))
+                    mortgage_items.append(_normalize_liability_item(raw, account_map, "mortgage"))
 
         # Calculate simple totals (no inferred analytics)
-        total_credit_cards = sum(c.get("reported_balance") or 0 for c in credit_cards)
-        total_student_loans = sum(s.get("reported_balance") or 0 for s in student_loans)
-        total_mortgages = sum(m.get("reported_balance") or 0 for m in mortgages)
-        total_other = sum(o.get("reported_balance") or 0 for o in other_loans)
+        total_credit = sum(c.get("reported_balance") or 0 for c in credit_items)
+        total_student = sum(s.get("reported_balance") or 0 for s in student_items)
+        total_mortgage = sum(m.get("reported_balance") or 0 for m in mortgage_items)
 
         return JSONResponse(
             status_code=200,
             content=build_response(
                 success=True,
                 data={
-                    # Grouped liabilities per spec
-                    "credit_cards": credit_cards,
-                    "student_loans": student_loans,
-                    "mortgages": mortgages,
-                    "other_loans": other_loans,
+                    # Frontend contract: liabilities grouped under "liabilities" key
+                    "liabilities": {
+                        "credit": credit_items,
+                        "student": student_items,
+                        "mortgage": mortgage_items,
+                    },
+                    # Frontend contract: accounts array
+                    "accounts": accounts_list,
 
                     # Simple totals (no projections, no risk scores)
                     "totals": {
-                        "credit_cards": round(total_credit_cards, 2),
-                        "student_loans": round(total_student_loans, 2),
-                        "mortgages": round(total_mortgages, 2),
-                        "other_loans": round(total_other, 2),
-                        "all_liabilities": round(total_credit_cards + total_student_loans + total_mortgages + total_other, 2),
+                        "credit_cards": round(total_credit, 2),
+                        "student_loans": round(total_student, 2),
+                        "mortgages": round(total_mortgage, 2),
+                        "all_liabilities": round(total_credit + total_student + total_mortgage, 2),
                     },
 
                     # Metadata
