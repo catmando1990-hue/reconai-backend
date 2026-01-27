@@ -178,6 +178,8 @@ from app.routers.evidence_export_api import router as evidence_export_router
 from app.routers.profile_complete import router as profile_complete_router
 # CORE — Single Source of Truth for Organization State (Metrics, Sync)
 from app.routers.core_state import router as core_state_router
+# PHASE 7 — Audit Package Exports API (Manual-Run, RBAC Fail-Closed, Org-Isolated)
+from app.routers.audit_exports import router as audit_exports_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -502,6 +504,8 @@ app.include_router(evidence_export_router)
 app.include_router(profile_complete_router)
 # CORE — Single Source of Truth for Organization State (Manual-Trigger, Derived Metrics)
 app.include_router(core_state_router)
+# PHASE 7 — Audit Package Exports API (Manual-Run, RBAC Fail-Closed, Org-Isolated)
+app.include_router(audit_exports_router)
 
 
 @app.on_event("startup")
@@ -633,6 +637,7 @@ async def startup_event():
     print(">> PHASE 2: GovCon/DCAA Compliance at /api/govcon/transactions, /api/govcon/export (manual-run, FAR 31.201, CAS 418)")
     print(">> PHASE 3: CFO Controls at /api/cfo/overview, /api/cfo/forecast, /api/cfo/exceptions (read-only, projections≠facts)")
     print(">> P0: Profile Completion at /api/profile/complete, /api/profile/status (atomic, idempotent, onboarding unblock)")
+    print(">> PHASE 7: Audit Exports at /api/audit-exports/package (manual-run, RBAC fail-closed, org-isolated)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
