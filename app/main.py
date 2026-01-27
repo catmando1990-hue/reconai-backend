@@ -186,6 +186,8 @@ from app.routers.audit_exports import router as audit_exports_router
 from app.routers.audit_exports_v2 import router as audit_exports_v2_router
 # PHASE 12A — GovCon Packet Presets API (Preset-Based Export, Manual-Run, No Plaid Calls)
 from app.routers.audit_export_presets_v2 import router as audit_export_presets_v2_router
+# PAYROLL — Write-Enabled Payroll Domain (10 Sub-Domains, Audit-Critical)
+from app.routers.payroll import router as payroll_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -518,6 +520,8 @@ app.include_router(audit_exports_router)
 app.include_router(audit_exports_v2_router)
 # PHASE 12A — GovCon Packet Presets API (Preset-Based Export, Manual-Run, No Plaid Calls)
 app.include_router(audit_export_presets_v2_router)
+# PAYROLL — Write-Enabled Payroll Domain (10 Sub-Domains, Audit-Critical)
+app.include_router(payroll_router)
 
 
 @app.on_event("startup")
@@ -538,6 +542,11 @@ async def startup_event():
     print(">> Initializing database...")
     await run_in_threadpool(init_db)
     print(">> Database ready")
+
+    # Initialize payroll tables
+    from app.payroll.db import init_payroll_tables
+    await run_in_threadpool(init_payroll_tables)
+    print(">> Payroll tables ready")
 
     # Step 15: Enforce approved run guardrail in production
     from app.guardrails import enforce_approved_run
