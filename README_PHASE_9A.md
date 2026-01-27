@@ -405,3 +405,138 @@ If issues are discovered:
 | Versioned explicitly | ✅ "2024.1" version string |
 | No frontend changes | ✅ Backend only |
 | No new endpoints | ✅ Extends existing manifest only |
+
+---
+
+## Phase 11A: Export Signing + Tamper-Evidence
+
+### Overview
+
+Phase 11A adds cryptographic signing (Ed25519) and a deterministic hash chain to the Audit Export v2 ZIP, enabling independent verification of integrity and provenance without requiring the server.
+
+### Signing Model
+
+1. **Hash Chain** — A deterministic chain is computed over all section file hashes (sorted by filename):
+   ```
+   H0 = SHA256(file_1_hash)
+   H1 = SHA256(H0 || file_2_hash)
+   ...
+   Hn = chain_root
+   ```
+2. **Ed25519 Signature** — The `chain_root` is signed using an Ed25519 private key loaded from the `AUDIT_EXPORT_SIGNING_PRIVATE_KEY` environment variable (hex-encoded 32-byte seed).
+3. **Self-Verification** — The signature is verified immediately after signing at generation time. If self-verification fails, signing artifacts are excluded entirely.
+
+### Graceful Degradation
+
+If `AUDIT_EXPORT_SIGNING_PRIVATE_KEY` is not set:
+- No `integrity` block in manifest
+- No `signatures/` folder in ZIP
+- No signing audit events
+- Export works identically to Phase 9A/10A
+
+**No runtime key generation** — this is a hard constraint.
+
+### ZIP Structure (with signing)
+
+```
+audit-export-{org_id}-{utc_timestamp}.zip
+├─ statements/
+│  └─ statements.json
+├─ assets/
+│  └─ asset_snapshot.json
+├─ liabilities/
+│  └─ liabilities.json
+├─ signatures/
+│  ├─ signature.ed25519       (raw 64-byte Ed25519 signature)
+│  ├─ public_key.ed25519      (raw 32-byte Ed25519 public key)
+│  └─ signature.json          (algorithm, chain_root, signed_at, key_id, manifest_version)
+├─ manifest.json
+└─ hashes.json
+```
+
+### Manifest `integrity` Block
+
+When signing is applied, `manifest.json` includes:
+
+```json
+{
+  "integrity": {
+    "hash_chain": {
+      "algorithm": "sha256",
+      "root": "<chain_root hex>"
+    },
+    "signature": {
+      "algorithm": "ed25519",
+      "key_id": "<first 16 chars of SHA256(public_key)>",
+      "signed_at": "<UTC ISO8601>"
+    }
+  }
+}
+```
+
+The `integrity` field is strongly typed via `IntegrityBlock` Pydantic model (not a loose dict).
+
+### `signatures/signature.json` Format
+
+```json
+{
+  "algorithm": "ed25519",
+  "chain_root": "<chain_root hex>",
+  "signed_at": "<UTC ISO8601>",
+  "key_id": "<key_id>",
+  "manifest_version": "v2"
+}
+```
+
+### Offline Verification Steps
+
+To independently verify an export:
+
+1. Extract the ZIP
+2. Compute SHA-256 of each section file
+3. Sort hashes by filename and recompute the hash chain
+4. Compare the computed `chain_root` to `manifest.json > integrity > hash_chain > root`
+5. Load `signatures/public_key.ed25519` (32 bytes)
+6. Verify `signatures/signature.ed25519` against the `chain_root` using Ed25519
+
+### What the Signature Proves vs. Does NOT Prove
+
+| Proves | Does NOT Prove |
+|--------|----------------|
+| Files have not been tampered with since generation | Compliance with any standard |
+| Export was produced by the holder of the signing key | Accuracy of underlying data |
+| Deterministic ordering was maintained | Completeness of financial records |
+
+### Phase 11A Audit Events
+
+| Event Type | Description |
+|------------|-------------|
+| `audit_export_v2_signed` | Export signed with Ed25519 (includes key_id, chain_root prefix) |
+| `audit_export_v2_signature_verified` | Self-verification passed at generation time |
+
+### Phase 11A Verification Checklist
+
+- [ ] File hashes sorted deterministically before chain computation
+- [ ] Hash chain uses `SHA256(prev \|\| next)` iteratively
+- [ ] Ed25519 key loaded from `AUDIT_EXPORT_SIGNING_PRIVATE_KEY` env var
+- [ ] Public key embedded in ZIP (`signatures/public_key.ed25519`)
+- [ ] `integrity` block present in `manifest.json` when signing applied
+- [ ] `signatures/signature.json` includes algorithm, chain_root, signed_at, key_id, manifest_version
+- [ ] Audit events emitted for signing and self-verification
+- [ ] Streaming response preserved (no new disk I/O)
+- [ ] No runtime key generation
+- [ ] No frontend changes
+- [ ] No new endpoints added
+- [ ] No compliance claims in signing artifacts
+
+### Phase 11A Canonical Laws Compliance
+
+| Requirement | Status |
+|-------------|--------|
+| No runtime key generation | ✅ Key from env var only |
+| No background verification | ✅ Self-verify at generation time only |
+| No new endpoints | ✅ Extends existing build pipeline |
+| No frontend changes | ✅ Backend only |
+| No compliance claims | ✅ Signing proves integrity/provenance only |
+| Graceful degradation | ✅ No key = no signing, export still works |
+| Strong typing | ✅ `IntegrityBlock` Pydantic model on `ManifestV2` |

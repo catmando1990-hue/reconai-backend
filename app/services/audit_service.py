@@ -43,6 +43,10 @@ AUDIT_EVENT_EXPORT_V2_PREVIEW = "audit_export_v2_preview"
 # Phase 10A — GovCon/DCAA Manifest Mapping event
 AUDIT_EVENT_EXPORT_V2_GOVCON_MAPPED = "audit_export_v2_govcon_mapped"
 
+# Phase 11A — Export Signing + Tamper-Evidence events
+AUDIT_EVENT_EXPORT_V2_SIGNED = "audit_export_v2_signed"
+AUDIT_EVENT_EXPORT_V2_SIGNATURE_VERIFIED = "audit_export_v2_signature_verified"
+
 
 class AuditServiceError(Exception):
     """Raised when audit service operation fails. MUST abort the request."""

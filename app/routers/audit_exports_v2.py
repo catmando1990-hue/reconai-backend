@@ -74,6 +74,9 @@ AUDIT_EVENT_V2_ACCESS_DENIED = "audit_export_v2_access_denied"
 AUDIT_EVENT_V2_PREVIEW = "audit_export_v2_preview"
 # Phase 10A: GovCon/DCAA mapping event
 AUDIT_EVENT_V2_GOVCON_MAPPED = "audit_export_v2_govcon_mapped"
+# Phase 11A: Export signing + tamper-evidence events
+AUDIT_EVENT_V2_SIGNED = "audit_export_v2_signed"
+AUDIT_EVENT_V2_SIGNATURE_VERIFIED = "audit_export_v2_signature_verified"
 
 
 # =============================================================================
@@ -359,6 +362,35 @@ async def generate_audit_export_v2(
             )
 
         # ==========================================================================
+        # AUDIT LOG: SIGNING (Phase 11A) - only if signing was applied
+        # ==========================================================================
+        if result.signing_applied:
+            integrity = result.manifest.get("integrity", {})
+            _log_audit_event(
+                user_id=user_id,
+                organization_id=organization_id,
+                event_type=AUDIT_EVENT_V2_SIGNED,
+                request_id=request_id,
+                payload={
+                    "org_id": organization_id,
+                    "chain_root_prefix": integrity.get("hash_chain", {}).get("root", "")[:16],
+                    "key_id": integrity.get("signature", {}).get("key_id"),
+                    "algorithm": "ed25519",
+                }
+            )
+            _log_audit_event(
+                user_id=user_id,
+                organization_id=organization_id,
+                event_type=AUDIT_EVENT_V2_SIGNATURE_VERIFIED,
+                request_id=request_id,
+                payload={
+                    "org_id": organization_id,
+                    "verification": "self_check_passed",
+                    "key_id": integrity.get("signature", {}).get("key_id"),
+                }
+            )
+
+        # ==========================================================================
         # CACHE EXPORT FOR DOWNLOAD
         # ==========================================================================
         export_id = f"exp_{uuid.uuid4().hex[:16]}"
@@ -390,6 +422,8 @@ async def generate_audit_export_v2(
                     "included_sections": result.manifest.get("included_sections", []),
                     "counts": result.manifest.get("counts", {}),
                     "govcon_mapping": govcon_mapping_data,
+                    "integrity": result.manifest.get("integrity"),
+                    "signing_applied": result.signing_applied,
                 },
                 "message": "Audit export v2 generated successfully. Use download_url to retrieve the ZIP.",
                 "request_id": request_id,

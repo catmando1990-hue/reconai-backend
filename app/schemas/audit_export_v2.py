@@ -208,6 +208,68 @@ class GovConMapping(BaseModel):
 
 
 # =============================================================================
+# SIGNING / TAMPER-EVIDENCE MODELS (Phase 11A)
+# =============================================================================
+
+class HashChainInfo(BaseModel):
+    """
+    Hash chain metadata for tamper-evidence.
+
+    The chain root is computed by iteratively hashing sorted file hashes:
+        H0 = SHA256(file_1_hash)
+        H1 = SHA256(H0 || file_2_hash)
+        ...
+        Hn = chain_root
+    """
+
+    algorithm: Literal["sha256"] = "sha256"
+    root: str = Field(
+        ...,
+        description="Final hash chain root (hex-encoded SHA-256)"
+    )
+
+    class Config:
+        frozen = True
+
+
+class SignatureInfo(BaseModel):
+    """
+    Ed25519 signature metadata for provenance verification.
+
+    The signature covers the chain_root, allowing independent verification
+    of the entire export's integrity via a single public key check.
+    """
+
+    algorithm: Literal["ed25519"] = "ed25519"
+    key_id: str = Field(
+        ...,
+        description="Stable key identifier (SHA-256 prefix of public key)"
+    )
+    signed_at: str = Field(
+        ...,
+        description="UTC ISO8601 timestamp of signing"
+    )
+
+    class Config:
+        frozen = True
+
+
+class IntegrityBlock(BaseModel):
+    """
+    Combined integrity metadata for manifest.json.
+
+    Included in manifest only when signing key is available.
+    NO compliance claims or certification assertions.
+    """
+
+    hash_chain: HashChainInfo
+    signature: SignatureInfo
+
+    class Config:
+        frozen = True
+
+
+# =============================================================================
 # MANIFEST AND HASHES MODELS
 # =============================================================================
 
@@ -264,6 +326,8 @@ class ManifestV2(BaseModel):
             "For authoritative financial data, use the respective Plaid product endpoints.",
         ]
     )
+    # Phase 11A: Optional integrity block (only present when signing key is available)
+    integrity: Optional[IntegrityBlock] = None
 
     class Config:
         frozen = True

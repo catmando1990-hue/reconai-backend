@@ -26,6 +26,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
+import os
 import sqlite3
 import zipfile
 from dataclasses import dataclass
@@ -33,6 +35,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.db import get_db_connection
+from app.schemas.audit_export_v2 import HashChainInfo, IntegrityBlock, SignatureInfo
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -157,6 +162,7 @@ class BuildResult:
     file_hashes: Dict[str, str]
     filename: str
     govcon_mapping_applied: bool = False  # Phase 10A: Track if GovCon mapping was injected
+    signing_applied: bool = False  # Phase 11A: Track if Ed25519 signing was applied
 
 
 # =============================================================================
@@ -187,6 +193,183 @@ def compute_sha256_str(data: str) -> str:
         Lowercase hex string of the hash
     """
     return compute_sha256(data.encode("utf-8"))
+
+
+# =============================================================================
+# HASH CHAIN + ED25519 SIGNING (Phase 11A)
+# =============================================================================
+# Deterministic hash chain over sorted file hashes, signed with Ed25519.
+# Key loaded from env var AUDIT_EXPORT_SIGNING_PRIVATE_KEY (hex-encoded 32-byte seed).
+# NO runtime key generation. If key is missing, signing is skipped gracefully.
+
+def compute_hash_chain(ordered_file_hashes: List[Tuple[str, str]]) -> str:
+    """
+    Compute a deterministic hash chain over sorted file hashes.
+
+    Chain construction:
+        H0 = SHA256(file_1_hash_bytes)
+        H1 = SHA256(H0_bytes || file_2_hash_bytes)
+        ...
+        Hn = chain_root
+
+    Args:
+        ordered_file_hashes: Sorted list of (filename, sha256_hex) tuples
+
+    Returns:
+        Final chain root as lowercase hex string
+    """
+    if not ordered_file_hashes:
+        return compute_sha256(b"empty")
+
+    # H0 = SHA256(first file hash as bytes)
+    chain = hashlib.sha256(ordered_file_hashes[0][1].encode("utf-8")).digest()
+
+    # Iterate remaining: Hn = SHA256(Hn-1 || file_n_hash)
+    for _, file_hash in ordered_file_hashes[1:]:
+        chain = hashlib.sha256(chain + file_hash.encode("utf-8")).digest()
+
+    return chain.hex()
+
+
+@dataclass(frozen=True)
+class SigningResult:
+    """Result of Ed25519 signing operation."""
+    signature_bytes: bytes
+    public_key_bytes: bytes
+    key_id: str
+    chain_root: str
+    signed_at: str
+
+
+def _load_signing_key() -> Optional[Any]:
+    """
+    Load Ed25519 private key from environment variable.
+
+    Expects AUDIT_EXPORT_SIGNING_PRIVATE_KEY as hex-encoded 32-byte seed.
+    Returns None if env var is not set (signing skipped gracefully).
+    NO runtime key generation — hard constraint.
+    """
+    key_hex = os.environ.get("AUDIT_EXPORT_SIGNING_PRIVATE_KEY")
+    if not key_hex:
+        return None
+
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        seed_bytes = bytes.fromhex(key_hex)
+        if len(seed_bytes) != 32:
+            logger.warning("AUDIT_EXPORT_SIGNING_PRIVATE_KEY must be 32 bytes (64 hex chars)")
+            return None
+        return Ed25519PrivateKey.from_private_bytes(seed_bytes)
+    except (ValueError, Exception) as e:
+        logger.warning(f"Failed to load signing key: {e}")
+        return None
+
+
+def sign_chain_root(chain_root: str, signed_at_iso: str) -> Optional[SigningResult]:
+    """
+    Sign the chain root using Ed25519.
+
+    Args:
+        chain_root: Hex-encoded hash chain root to sign
+        signed_at_iso: UTC ISO8601 timestamp of signing
+
+    Returns:
+        SigningResult if key is available, None if signing is skipped
+    """
+    private_key = _load_signing_key()
+    if private_key is None:
+        return None
+
+    try:
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        # Sign the chain_root bytes (UTF-8 encoded hex string)
+        signature_bytes = private_key.sign(chain_root.encode("utf-8"))
+
+        # Extract public key
+        public_key = private_key.public_key()
+        public_key_bytes = public_key.public_bytes(
+            encoding=Encoding.Raw,
+            format=PublicFormat.Raw,
+        )
+
+        # key_id = first 16 chars of SHA256(public_key)
+        key_id = compute_sha256(public_key_bytes)[:16]
+
+        return SigningResult(
+            signature_bytes=signature_bytes,
+            public_key_bytes=public_key_bytes,
+            key_id=key_id,
+            chain_root=chain_root,
+            signed_at=signed_at_iso,
+        )
+    except Exception as e:
+        logger.error(f"Ed25519 signing failed: {e}")
+        return None
+
+
+def verify_signature(chain_root: str, signature_bytes: bytes, public_key_bytes: bytes) -> bool:
+    """
+    Self-verify an Ed25519 signature at generation time.
+
+    Args:
+        chain_root: Hex-encoded chain root that was signed
+        signature_bytes: Raw Ed25519 signature
+        public_key_bytes: Raw Ed25519 public key (32 bytes)
+
+    Returns:
+        True if verification succeeds, False otherwise
+    """
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
+        public_key.verify(signature_bytes, chain_root.encode("utf-8"))
+        return True
+    except Exception as e:
+        logger.error(f"Ed25519 signature verification failed: {e}")
+        return False
+
+
+def build_signature_artifacts(signing_result: SigningResult) -> Dict[str, bytes]:
+    """
+    Build the signatures/ folder artifacts for the ZIP.
+
+    Returns:
+        Dict of filepath -> bytes for:
+        - signatures/signature.ed25519
+        - signatures/public_key.ed25519
+        - signatures/signature.json
+    """
+    signature_json = {
+        "algorithm": "ed25519",
+        "chain_root": signing_result.chain_root,
+        "signed_at": signing_result.signed_at,
+        "key_id": signing_result.key_id,
+        "manifest_version": MANIFEST_VERSION,
+    }
+
+    return {
+        "signatures/signature.ed25519": signing_result.signature_bytes,
+        "signatures/public_key.ed25519": signing_result.public_key_bytes,
+        "signatures/signature.json": json.dumps(signature_json, indent=2).encode("utf-8"),
+    }
+
+
+def build_integrity_block(signing_result: SigningResult) -> IntegrityBlock:
+    """
+    Build the integrity block for manifest.json.
+
+    Returns:
+        IntegrityBlock with hash_chain and signature metadata.
+        NO compliance claims or certification assertions.
+    """
+    return IntegrityBlock(
+        hash_chain=HashChainInfo(root=signing_result.chain_root),
+        signature=SignatureInfo(
+            key_id=signing_result.key_id,
+            signed_at=signing_result.signed_at,
+        ),
+    )
 
 
 # =============================================================================
@@ -555,9 +738,10 @@ def build_manifest(
     included_sections: List[str],
     counts: Dict[str, int],
     files: List[str],
+    integrity: Optional[IntegrityBlock] = None,
 ) -> Tuple[bytes, bool]:
     """
-    Build the manifest.json content with GovCon/DCAA mapping.
+    Build the manifest.json content with GovCon/DCAA mapping and optional integrity block.
 
     Args:
         org_id: Organization ID
@@ -567,6 +751,7 @@ def build_manifest(
         included_sections: List of included section names
         counts: Per-section counts
         files: List of files in the export
+        integrity: Optional IntegrityBlock (Phase 11A signing metadata, strongly typed)
 
     Returns:
         Tuple of (JSON bytes for manifest.json, govcon_mapping_applied)
@@ -589,6 +774,8 @@ def build_manifest(
         "compliance_notes": COMPLIANCE_NOTES,
         # Phase 10A: GovCon/DCAA static mapping (only if sections present)
         "govcon_mapping": govcon_mapping if govcon_mapping_applied else None,
+        # Phase 11A: Integrity block (strongly typed, only if signing key available)
+        "integrity": integrity.model_dump() if integrity is not None else None,
     }
 
     # Remove None values for cleaner JSON
@@ -697,8 +884,50 @@ def build_audit_export_v2(
         section_counts["liabilities_accounts"] = liab_count
 
     # ==========================================================================
-    # MANIFEST (with GovCon/DCAA mapping - Phase 10A)
+    # HASH CHAIN + SIGNING (Phase 11A)
     # ==========================================================================
+    # Compute hash chain over section file hashes (before manifest, since
+    # manifest will include the integrity block with chain_root).
+    # Signing is skipped gracefully if AUDIT_EXPORT_SIGNING_PRIVATE_KEY is not set.
+
+    signing_applied = False
+    integrity_block = None
+    signature_artifacts: Dict[str, bytes] = {}
+
+    # Compute chain root from sorted section file hashes
+    sorted_hashes = sorted(file_hashes.items())  # deterministic order
+    chain_root = compute_hash_chain(sorted_hashes)
+
+    # Attempt Ed25519 signing
+    signing_result = sign_chain_root(chain_root, generated_at_iso)
+    if signing_result is not None:
+        # Build integrity block for manifest
+        integrity_block = build_integrity_block(signing_result)
+
+        # Build signature artifacts for ZIP
+        signature_artifacts = build_signature_artifacts(signing_result)
+
+        # Self-verify at generation time
+        verified = verify_signature(
+            chain_root=signing_result.chain_root,
+            signature_bytes=signing_result.signature_bytes,
+            public_key_bytes=signing_result.public_key_bytes,
+        )
+        if verified:
+            signing_applied = True
+            logger.info(f"Export signing succeeded: key_id={signing_result.key_id}, chain_root={chain_root[:16]}...")
+        else:
+            # Self-verification failed — do NOT include signing artifacts
+            logger.error("Export signing self-verification FAILED — signing artifacts excluded")
+            integrity_block = None
+            signature_artifacts = {}
+
+    # ==========================================================================
+    # MANIFEST (with GovCon/DCAA mapping - Phase 10A, integrity - Phase 11A)
+    # ==========================================================================
+    # Include signature artifact files in the manifest file list
+    all_files = list(file_contents.keys()) + list(signature_artifacts.keys())
+
     manifest_json, govcon_mapping_applied = build_manifest(
         org_id=organization_id,
         user_id=user_id,
@@ -706,17 +935,25 @@ def build_audit_export_v2(
         generated_at_iso=generated_at_iso,
         included_sections=included_sections,
         counts=section_counts,
-        files=list(file_contents.keys()),
+        files=sorted(all_files),
+        integrity=integrity_block,
     )
     file_contents["manifest.json"] = manifest_json
     file_hashes["manifest.json"] = compute_sha256(manifest_json)
 
+    # Add signature artifact hashes
+    for sig_path, sig_bytes in signature_artifacts.items():
+        file_hashes[sig_path] = compute_sha256(sig_bytes)
+
     # ==========================================================================
-    # HASHES (including manifest hash)
+    # HASHES (including manifest hash + signature file hashes)
     # ==========================================================================
     hashes_json = build_hashes(generated_at_iso, file_hashes)
     file_contents["hashes.json"] = hashes_json
     # Note: hashes.json itself is not included in file_hashes to avoid circular dependency
+
+    # Add signature artifacts to file_contents for ZIP inclusion
+    file_contents.update(signature_artifacts)
 
     # ==========================================================================
     # BUILD ZIP
@@ -742,6 +979,7 @@ def build_audit_export_v2(
         file_hashes=file_hashes,
         filename=filename,
         govcon_mapping_applied=govcon_mapping_applied,
+        signing_applied=signing_applied,
     )
 
 
