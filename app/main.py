@@ -182,6 +182,8 @@ from app.routers.profile_complete import router as profile_complete_router
 from app.routers.core_state import router as core_state_router
 # PHASE 7 — Audit Package Exports API (Manual-Run, RBAC Fail-Closed, Org-Isolated)
 from app.routers.audit_exports import router as audit_exports_router
+# PHASE 9A — Audit Export v2 API (Evidence-Grade Bundle, Manual-Run, No Plaid Calls)
+from app.routers.audit_exports_v2 import router as audit_exports_v2_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -510,6 +512,8 @@ app.include_router(profile_complete_router)
 app.include_router(core_state_router)
 # PHASE 7 — Audit Package Exports API (Manual-Run, RBAC Fail-Closed, Org-Isolated)
 app.include_router(audit_exports_router)
+# PHASE 9A — Audit Export v2 API (Evidence-Grade Bundle, Manual-Run, No Plaid Calls)
+app.include_router(audit_exports_v2_router)
 
 
 @app.on_event("startup")

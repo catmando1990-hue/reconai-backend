@@ -30,6 +30,17 @@ from app.services.audit_store import (
 )
 
 
+# =============================================================================
+# AUDIT EVENT CONSTANTS
+# =============================================================================
+
+# Phase 9A — Audit Export v2 events (Evidence-Grade Financial Export Bundle)
+AUDIT_EVENT_EXPORT_V2_GENERATED = "audit_export_v2_generated"
+AUDIT_EVENT_EXPORT_V2_DOWNLOADED = "audit_export_v2_downloaded"
+AUDIT_EVENT_EXPORT_V2_ACCESS_DENIED = "audit_export_v2_access_denied"
+AUDIT_EVENT_EXPORT_V2_PREVIEW = "audit_export_v2_preview"
+
+
 class AuditServiceError(Exception):
     """Raised when audit service operation fails. MUST abort the request."""
     pass
