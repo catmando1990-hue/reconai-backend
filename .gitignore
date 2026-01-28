@@ -103,14 +103,5 @@ logs/
 # Node (some tooling deps)
 node_modules/
 
-# Environment files
-.env
-.env.*
-
-# Local data / sqlite
-*.db
-*.sqlite
+# Local deployment config
 .env.deploy
-
-# Phase-1 Hotfix: Ignore corrupted/stray artifacts
-C#Uf03areconai-backendrequirements.txt
