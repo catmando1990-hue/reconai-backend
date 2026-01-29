@@ -1469,13 +1469,13 @@ async def get_account_activity(
 
             rows = cursor.fetchall()
 
-            # Try to get account names from plaid_accounts if available
+            # Try to get account names from accounts if available
             account_names = {}
             account_types = {}
             try:
                 cursor = conn.execute("""
                     SELECT account_id, name, type
-                    FROM plaid_accounts
+                    FROM accounts
                     WHERE organization_id = ?
                 """, (org_id,))
                 for row in cursor.fetchall():
