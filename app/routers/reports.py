@@ -931,7 +931,7 @@ def _check_data_integrity(org_id: str) -> List[DataIntegrityIssue]:
 @router.get("/recurring", response_model=RecurringActivityResponse)
 async def get_recurring_activity(
     ctx: AuthContext = Depends(get_current_context),
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 30 days ago."),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 90 days ago."),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
     min_occurrences: int = Query(3, ge=2, description="Minimum occurrences to qualify as recurring"),
     min_confidence: float = Query(0.85, ge=0.0, le=1.0, description="Minimum confidence threshold")
@@ -945,11 +945,11 @@ async def get_recurring_activity(
     request_id = _generate_request_id()
     org_id = ctx["org_id"]
 
-    # Default to last 30 days
+    # Default to last 90 days (need longer window to detect recurring patterns)
     if not end_date:
         end_date = date.today().isoformat()
     if not start_date:
-        start_date = (date.today() - timedelta(days=30)).isoformat()
+        start_date = (date.today() - timedelta(days=90)).isoformat()
 
     try:
         with sqlite3.connect(DB_PATH) as conn:
