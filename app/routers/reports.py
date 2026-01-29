@@ -1257,3 +1257,280 @@ async def get_data_integrity(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "DATABASE_ERROR", "message": str(e), "request_id": request_id}
         )
+
+
+# =========================================================================
+# PHASE 1: CORE REPORTS - CATEGORY SPEND & ACCOUNT ACTIVITY
+# =========================================================================
+
+class CategorySpendItem(BaseModel):
+    """Single category spend item"""
+    category: str
+    amount: float
+    transaction_count: int
+    percentage: float
+
+
+class TopMerchant(BaseModel):
+    """Top merchant by spend"""
+    merchant: str
+    category: str
+    amount: float
+    transaction_count: int
+
+
+class CategorySpendResponse(BaseModel):
+    """Response for category spend report"""
+    organization_id: str
+    start_date: str
+    end_date: str
+    total_spend: float
+    categories: List[CategorySpendItem]
+    top_merchants: List[TopMerchant]
+    generated_at: str
+    request_id: str
+
+
+class DailyActivity(BaseModel):
+    """Single day activity"""
+    date: str
+    balance: float
+    inflows: float
+    outflows: float
+
+
+class AccountActivityItem(BaseModel):
+    """Account activity details"""
+    account_id: str
+    account_name: str
+    account_type: str
+    current_balance: float
+    total_inflows: float
+    total_outflows: float
+    net_change: float
+    transaction_count: int
+
+
+class AccountActivitySummary(BaseModel):
+    """Summary of all account activity"""
+    total_balance: float
+    total_inflows: float
+    total_outflows: float
+    net_change: float
+    account_count: int
+
+
+class AccountActivityResponse(BaseModel):
+    """Response for account activity report"""
+    organization_id: str
+    start_date: str
+    end_date: str
+    accounts: List[AccountActivityItem]
+    summary: AccountActivitySummary
+    generated_at: str
+    request_id: str
+
+
+@router.get("/category-spend", response_model=CategorySpendResponse)
+async def get_category_spend(
+    ctx: AuthContext = Depends(get_current_context),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 30 days ago."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
+):
+    """
+    Get spending breakdown by category.
+
+    READ-ONLY endpoint. Shows outflows grouped by category with percentages.
+    """
+    request_id = _generate_request_id()
+    org_id = ctx["org_id"]
+
+    # Default to last 30 days
+    if not end_date:
+        end_date = date.today().isoformat()
+    if not start_date:
+        start_date = (date.today() - timedelta(days=30)).isoformat()
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Get spending by category (outflows only - negative amounts)
+            cursor = conn.execute("""
+                SELECT
+                    COALESCE(category, 'Uncategorized') as category,
+                    SUM(ABS(amount)) as total_amount,
+                    COUNT(*) as transaction_count
+                FROM core_transactions
+                WHERE organization_id = ?
+                  AND date >= ? AND date <= ?
+                  AND amount < 0
+                GROUP BY category
+                ORDER BY total_amount DESC
+            """, (org_id, start_date, end_date))
+
+            rows = cursor.fetchall()
+
+            total_spend = sum(row["total_amount"] or 0 for row in rows)
+
+            categories = []
+            for row in rows:
+                amt = row["total_amount"] or 0
+                pct = (amt / total_spend * 100) if total_spend > 0 else 0
+                categories.append(CategorySpendItem(
+                    category=row["category"],
+                    amount=round(amt, 2),
+                    transaction_count=row["transaction_count"],
+                    percentage=round(pct, 1),
+                ))
+
+            # Get top merchants
+            cursor = conn.execute("""
+                SELECT
+                    COALESCE(merchant_normalized, merchant_name, name, 'Unknown') as merchant,
+                    COALESCE(category, 'Uncategorized') as category,
+                    SUM(ABS(amount)) as total_amount,
+                    COUNT(*) as transaction_count
+                FROM core_transactions
+                WHERE organization_id = ?
+                  AND date >= ? AND date <= ?
+                  AND amount < 0
+                GROUP BY merchant, category
+                ORDER BY total_amount DESC
+                LIMIT 10
+            """, (org_id, start_date, end_date))
+
+            merchant_rows = cursor.fetchall()
+
+            top_merchants = [
+                TopMerchant(
+                    merchant=r["merchant"],
+                    category=r["category"],
+                    amount=round(r["total_amount"] or 0, 2),
+                    transaction_count=r["transaction_count"],
+                )
+                for r in merchant_rows
+            ]
+
+        return CategorySpendResponse(
+            organization_id=org_id,
+            start_date=start_date,
+            end_date=end_date,
+            total_spend=round(total_spend, 2),
+            categories=categories,
+            top_merchants=top_merchants,
+            generated_at=datetime.utcnow().isoformat(),
+            request_id=request_id,
+        )
+
+    except sqlite3.Error as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "DATABASE_ERROR", "message": str(e), "request_id": request_id}
+        )
+
+
+@router.get("/account-activity", response_model=AccountActivityResponse)
+async def get_account_activity(
+    ctx: AuthContext = Depends(get_current_context),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 30 days ago."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
+):
+    """
+    Get activity breakdown by account.
+
+    READ-ONLY endpoint. Shows inflows, outflows, and net change per account.
+    """
+    request_id = _generate_request_id()
+    org_id = ctx["org_id"]
+
+    # Default to last 30 days
+    if not end_date:
+        end_date = date.today().isoformat()
+    if not start_date:
+        start_date = (date.today() - timedelta(days=30)).isoformat()
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Get account activity summary
+            cursor = conn.execute("""
+                SELECT
+                    COALESCE(account_id, 'unknown') as account_id,
+                    SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_inflows,
+                    SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_outflows,
+                    COUNT(*) as transaction_count
+                FROM core_transactions
+                WHERE organization_id = ?
+                  AND date >= ? AND date <= ?
+                GROUP BY account_id
+            """, (org_id, start_date, end_date))
+
+            rows = cursor.fetchall()
+
+            # Try to get account names from plaid_accounts if available
+            account_names = {}
+            account_types = {}
+            try:
+                cursor = conn.execute("""
+                    SELECT account_id, name, type
+                    FROM plaid_accounts
+                    WHERE organization_id = ?
+                """, (org_id,))
+                for row in cursor.fetchall():
+                    account_names[row["account_id"]] = row["name"]
+                    account_types[row["account_id"]] = row["type"]
+            except sqlite3.Error:
+                pass  # Table may not exist, continue without names
+
+            accounts = []
+            total_inflows = 0
+            total_outflows = 0
+
+            for row in rows:
+                acc_id = row["account_id"]
+                inflows = row["total_inflows"] or 0
+                outflows = row["total_outflows"] or 0
+                net = inflows - outflows
+
+                total_inflows += inflows
+                total_outflows += outflows
+
+                accounts.append(AccountActivityItem(
+                    account_id=acc_id,
+                    account_name=account_names.get(acc_id, f"Account {acc_id[:8]}..."),
+                    account_type=account_types.get(acc_id, "unknown"),
+                    current_balance=0,  # Would need separate query for current balance
+                    total_inflows=round(inflows, 2),
+                    total_outflows=round(outflows, 2),
+                    net_change=round(net, 2),
+                    transaction_count=row["transaction_count"],
+                ))
+
+            # Sort by net change (highest activity first)
+            accounts.sort(key=lambda x: abs(x.net_change), reverse=True)
+
+            net_change = total_inflows - total_outflows
+
+        return AccountActivityResponse(
+            organization_id=org_id,
+            start_date=start_date,
+            end_date=end_date,
+            accounts=accounts,
+            summary=AccountActivitySummary(
+                total_balance=0,  # Would need current balance query
+                total_inflows=round(total_inflows, 2),
+                total_outflows=round(total_outflows, 2),
+                net_change=round(net_change, 2),
+                account_count=len(accounts),
+            ),
+            generated_at=datetime.utcnow().isoformat(),
+            request_id=request_id,
+        )
+
+    except sqlite3.Error as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "DATABASE_ERROR", "message": str(e), "request_id": request_id}
+        )
