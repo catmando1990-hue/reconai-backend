@@ -126,7 +126,7 @@ def get_account_balances(
                 a.normal_balance,
                 COALESCE(SUM(jel.debit), 0) as total_debit,
                 COALESCE(SUM(jel.credit), 0) as total_credit
-            FROM accounts a
+            FROM plaid_accounts a
             LEFT JOIN journal_entry_lines jel ON a.code = jel.account_code
             LEFT JOIN journal_entries je ON jel.entry_id = je.entry_id
             WHERE a.organization_id = ?
@@ -386,7 +386,7 @@ async def get_cash_flow_statement(
                 SELECT COALESCE(SUM(jel.debit - jel.credit), 0) as balance
                 FROM journal_entry_lines jel
                 JOIN journal_entries je ON jel.entry_id = je.entry_id
-                JOIN accounts a ON jel.account_code = a.code
+                JOIN plaid_accounts a ON jel.account_code = a.code
                 WHERE a.organization_id = ?
                     AND a.type IN ('Asset', 'Current Asset')
                     AND a.name LIKE '%Cash%' OR a.name LIKE '%Bank%'
@@ -839,7 +839,7 @@ def _check_data_integrity(org_id: str) -> List[DataIntegrityIssue]:
         cursor = conn.execute("""
             SELECT date, amount, merchant_normalized, COUNT(*) as cnt,
                    GROUP_CONCAT(id) as ids
-            FROM core_transactions
+            FROM transactions
             WHERE organization_id = ?
             GROUP BY date, amount, merchant_normalized
             HAVING cnt > 1
@@ -857,14 +857,14 @@ def _check_data_integrity(org_id: str) -> List[DataIntegrityIssue]:
         # Check 2: Missing dates (gaps in transaction sequence)
         cursor = conn.execute("""
             SELECT MIN(date) as min_date, MAX(date) as max_date
-            FROM core_transactions
+            FROM transactions
             WHERE organization_id = ?
         """, (org_id,))
         date_range = cursor.fetchone()
 
         if date_range and date_range['min_date'] and date_range['max_date']:
             cursor = conn.execute("""
-                SELECT DISTINCT date FROM core_transactions
+                SELECT DISTINCT date FROM transactions
                 WHERE organization_id = ?
                 ORDER BY date
             """, (org_id,))
@@ -891,7 +891,7 @@ def _check_data_integrity(org_id: str) -> List[DataIntegrityIssue]:
 
         # Check 3: Invalid amounts (zero or null)
         cursor = conn.execute("""
-            SELECT id, date, name FROM core_transactions
+            SELECT id, date, name FROM transactions
             WHERE organization_id = ? AND (amount IS NULL OR amount = 0)
         """, (org_id,))
 
@@ -907,7 +907,7 @@ def _check_data_integrity(org_id: str) -> List[DataIntegrityIssue]:
 
         # Check 4: Orphaned transactions (no linked account)
         cursor = conn.execute("""
-            SELECT id FROM core_transactions
+            SELECT id FROM transactions
             WHERE organization_id = ? AND account_id IS NULL
         """, (org_id,))
 
@@ -957,7 +957,7 @@ async def get_recurring_activity(
 
             cursor = conn.execute("""
                 SELECT id, date, amount, name, merchant_name, merchant_normalized
-                FROM core_transactions
+                FROM transactions
                 WHERE organization_id = ?
                   AND date >= ? AND date <= ?
                 ORDER BY date ASC
@@ -1033,7 +1033,7 @@ async def get_balance_history(
             # Build query
             query = """
                 SELECT id, date, amount, name, account_id
-                FROM core_transactions
+                FROM transactions
                 WHERE organization_id = ?
                   AND date >= ? AND date <= ?
             """
@@ -1361,7 +1361,7 @@ async def get_category_spend(
                     COALESCE(category, 'Uncategorized') as category,
                     SUM(ABS(amount)) as total_amount,
                     COUNT(*) as transaction_count
-                FROM core_transactions
+                FROM transactions
                 WHERE organization_id = ?
                   AND date >= ? AND date <= ?
                   AND amount < 0
@@ -1391,7 +1391,7 @@ async def get_category_spend(
                     COALESCE(category, 'Uncategorized') as category,
                     SUM(ABS(amount)) as total_amount,
                     COUNT(*) as transaction_count
-                FROM core_transactions
+                FROM transactions
                 WHERE organization_id = ?
                   AND date >= ? AND date <= ?
                   AND amount < 0
@@ -1461,7 +1461,7 @@ async def get_account_activity(
                     SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_inflows,
                     SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as total_outflows,
                     COUNT(*) as transaction_count
-                FROM core_transactions
+                FROM transactions
                 WHERE organization_id = ?
                   AND date >= ? AND date <= ?
                 GROUP BY account_id
@@ -1475,7 +1475,7 @@ async def get_account_activity(
             try:
                 cursor = conn.execute("""
                     SELECT account_id, name, type
-                    FROM accounts
+                    FROM plaid_accounts
                     WHERE organization_id = ?
                 """, (org_id,))
                 for row in cursor.fetchall():
