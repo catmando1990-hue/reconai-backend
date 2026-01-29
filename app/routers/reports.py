@@ -187,8 +187,8 @@ def get_account_balances(
 @router.get("/income-statement", response_model=IncomeStatementResponse)
 async def get_income_statement(
     org_id: str = Depends(get_current_organization_id),
-    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to first of current month."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):
@@ -198,6 +198,11 @@ async def get_income_statement(
     Shows revenue and expenses for a date range
     """
     try:
+        # Default to current month
+        if not end_date:
+            end_date = date.today().isoformat()
+        if not start_date:
+            start_date = date.today().replace(day=1).isoformat()
         # Get revenue accounts
         revenue_accounts = get_account_balances(
             org_id=org_id,
@@ -244,7 +249,7 @@ async def get_income_statement(
 @router.get("/balance-sheet", response_model=BalanceSheetResponse)
 async def get_balance_sheet(
     org_id: str = Depends(get_current_organization_id),
-    as_of_date: str = Query(..., description="As of date (YYYY-MM-DD)"),
+    as_of_date: Optional[str] = Query(None, description="As of date (YYYY-MM-DD). Defaults to today."),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):
@@ -254,6 +259,9 @@ async def get_balance_sheet(
     Shows assets, liabilities, and equity as of a specific date
     """
     try:
+        # Default to today
+        if not as_of_date:
+            as_of_date = date.today().isoformat()
         # Get asset accounts
         asset_accounts = get_account_balances(
             org_id=org_id,
@@ -304,7 +312,7 @@ async def get_balance_sheet(
 @router.get("/trial-balance", response_model=TrialBalanceResponse)
 async def get_trial_balance(
     org_id: str = Depends(get_current_organization_id),
-    as_of_date: str = Query(..., description="As of date (YYYY-MM-DD)"),
+    as_of_date: Optional[str] = Query(None, description="As of date (YYYY-MM-DD). Defaults to today."),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):
@@ -315,6 +323,9 @@ async def get_trial_balance(
     Verifies that total debits equal total credits
     """
     try:
+        # Default to today
+        if not as_of_date:
+            as_of_date = date.today().isoformat()
         # Get all accounts with balances
         accounts = get_account_balances(
             org_id=org_id,
@@ -350,8 +361,8 @@ async def get_trial_balance(
 @router.get("/cash-flow", response_model=CashFlowStatementResponse)
 async def get_cash_flow_statement(
     org_id: str = Depends(get_current_organization_id),
-    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 30 days ago."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):
@@ -361,6 +372,11 @@ async def get_cash_flow_statement(
     Shows cash flows from operating, investing, and financing activities
     """
     try:
+        # Default to last 30 days
+        if not end_date:
+            end_date = date.today().isoformat()
+        if not start_date:
+            start_date = (date.today() - timedelta(days=30)).isoformat()
         # This is a simplified version - in practice, cash flow statements
         # require more detailed categorization of transactions
 
@@ -450,7 +466,7 @@ async def get_cash_flow_statement(
 @router.get("/summary")
 async def get_financial_summary(
     org_id: str = Depends(get_current_organization_id),
-    as_of_date: str = Query(..., description="As of date (YYYY-MM-DD)"),
+    as_of_date: Optional[str] = Query(None, description="As of date (YYYY-MM-DD). Defaults to today."),
     entity_id: Optional[str] = None,
     current_user_id: str = Depends(get_current_user_id)
 ):
@@ -460,6 +476,9 @@ async def get_financial_summary(
     Provides key metrics at a glance
     """
     try:
+        # Default to today
+        if not as_of_date:
+            as_of_date = date.today().isoformat()
         # Calculate metrics using existing endpoints
         # Get current month dates
         as_of = datetime.fromisoformat(as_of_date).date()
@@ -532,43 +551,20 @@ async def generate_report(
     Compatible with frontend's generic /api/reports/generate call
     """
     try:
-        # Route to appropriate report handler
+        # Route to appropriate report handler (all endpoints now have sensible defaults)
         if report_type == "income-statement":
-            if not start_date or not end_date:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="start_date and end_date required for income statement"
-                )
             return await get_income_statement(org_id, start_date, end_date, entity_id, current_user_id)
 
         elif report_type == "balance-sheet":
-            if not as_of_date:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="as_of_date required for balance sheet"
-                )
             return await get_balance_sheet(org_id, as_of_date, entity_id, current_user_id)
 
         elif report_type == "trial-balance":
-            if not as_of_date:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="as_of_date required for trial balance"
-                )
             return await get_trial_balance(org_id, as_of_date, entity_id, current_user_id)
 
         elif report_type == "cash-flow":
-            if not start_date or not end_date:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="start_date and end_date required for cash flow statement"
-                )
             return await get_cash_flow_statement(org_id, start_date, end_date, entity_id, current_user_id)
 
         elif report_type == "summary":
-            if not as_of_date:
-                # Default to today
-                as_of_date = datetime.now().date().isoformat()
             return await get_financial_summary(org_id, as_of_date, entity_id, current_user_id)
 
         else:
@@ -935,8 +931,8 @@ def _check_data_integrity(org_id: str) -> List[DataIntegrityIssue]:
 @router.get("/recurring", response_model=RecurringActivityResponse)
 async def get_recurring_activity(
     ctx: AuthContext = Depends(get_current_context),
-    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 30 days ago."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
     min_occurrences: int = Query(3, ge=2, description="Minimum occurrences to qualify as recurring"),
     min_confidence: float = Query(0.85, ge=0.0, le=1.0, description="Minimum confidence threshold")
 ):
@@ -948,6 +944,12 @@ async def get_recurring_activity(
     """
     request_id = _generate_request_id()
     org_id = ctx["org_id"]
+
+    # Default to last 30 days
+    if not end_date:
+        end_date = date.today().isoformat()
+    if not start_date:
+        start_date = (date.today() - timedelta(days=30)).isoformat()
 
     try:
         with sqlite3.connect(DB_PATH) as conn:
@@ -991,8 +993,8 @@ async def get_recurring_activity(
 @router.get("/balance-history", response_model=BalanceHistoryResponse)
 async def get_balance_history(
     ctx: AuthContext = Depends(get_current_context),
-    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
-    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD). Defaults to 30 days ago."),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD). Defaults to today."),
     account_ids: Optional[str] = Query(None, description="Comma-separated account IDs (optional)")
 ):
     """
@@ -1002,6 +1004,12 @@ async def get_balance_history(
     """
     request_id = _generate_request_id()
     org_id = ctx["org_id"]
+
+    # Default to last 30 days
+    if not end_date:
+        end_date = date.today().isoformat()
+    if not start_date:
+        start_date = (date.today() - timedelta(days=30)).isoformat()
 
     try:
         parsed_start = datetime.fromisoformat(start_date).date()

@@ -190,6 +190,10 @@ from app.routers.audit_export_presets_v2 import router as audit_export_presets_v
 from app.routers.payroll import router as payroll_router
 # CFO Data Isolation — Separate Data Silo for CFO Tier (Accounts, Transactions, Budgets)
 from app.routers.cfo_data import router as cfo_data_router
+# Tier-Specific Bank Connections (CFO, Payroll, GovCon)
+from app.routers.cfo_connections import router as cfo_connections_router
+from app.routers.payroll_connections import router as payroll_connections_router
+from app.routers.govcon_connections import router as govcon_connections_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -526,6 +530,10 @@ app.include_router(audit_export_presets_v2_router)
 app.include_router(payroll_router)
 # CFO DATA — Write-Enabled CFO Data (Accounts, Transactions, Budgets) - Isolated from Core
 app.include_router(cfo_data_router)
+# TIER CONNECTIONS — Bank Connections per Paid Tier (CFO, Payroll, GovCon)
+app.include_router(cfo_connections_router)
+app.include_router(payroll_connections_router)
+app.include_router(govcon_connections_router)
 
 
 @app.on_event("startup")
@@ -556,6 +564,20 @@ async def startup_event():
     from app.cfo.db import init_cfo_tables
     await run_in_threadpool(init_cfo_tables)
     print(">> CFO tables ready")
+
+    # Initialize tier connection tables
+    from app.db import get_db_connection
+    import os
+    migration_path = os.path.join(os.path.dirname(__file__), '../migrations/004_tier_connections.sql')
+    if os.path.exists(migration_path):
+        conn = get_db_connection()
+        try:
+            with open(migration_path, 'r') as f:
+                conn.executescript(f.read())
+            conn.commit()
+        finally:
+            conn.close()
+    print(">> Tier connection tables ready")
 
     # Step 15: Enforce approved run guardrail in production
     from app.guardrails import enforce_approved_run
@@ -670,6 +692,7 @@ async def startup_event():
     print(">> PHASE 7: Audit Exports at /api/audit-exports/package (manual-run, RBAC fail-closed, org-isolated)")
     print(">> PHASE 7.1: Plaid Products at /api/plaid/assets, /api/plaid/statements, /api/plaid/identity, /api/plaid/income, /api/plaid/investments, /api/plaid/liabilities, /api/plaid/enrich (manual-run, org-isolated)")
     print(">> CFO DATA: Accounts at /api/cfo/accounts, Transactions at /api/cfo/transactions (isolated from core_transactions)")
+    print(">> TIER CONNECTIONS: CFO at /api/cfo/connections, Payroll at /api/payroll/connections, GovCon at /api/govcon/connections (tier-isolated)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 
