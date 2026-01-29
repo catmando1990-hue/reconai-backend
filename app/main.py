@@ -188,6 +188,8 @@ from app.routers.audit_exports_v2 import router as audit_exports_v2_router
 from app.routers.audit_export_presets_v2 import router as audit_export_presets_v2_router
 # PAYROLL — Write-Enabled Payroll Domain (10 Sub-Domains, Audit-Critical)
 from app.routers.payroll import router as payroll_router
+# CFO Data Isolation — Separate Data Silo for CFO Tier (Accounts, Transactions, Budgets)
+from app.routers.cfo_data import router as cfo_data_router
 
 
 def get_allowed_origins() -> list[str]:
@@ -522,6 +524,8 @@ app.include_router(audit_exports_v2_router)
 app.include_router(audit_export_presets_v2_router)
 # PAYROLL — Write-Enabled Payroll Domain (10 Sub-Domains, Audit-Critical)
 app.include_router(payroll_router)
+# CFO DATA — Write-Enabled CFO Data (Accounts, Transactions, Budgets) - Isolated from Core
+app.include_router(cfo_data_router)
 
 
 @app.on_event("startup")
@@ -547,6 +551,11 @@ async def startup_event():
     from app.payroll.db import init_payroll_tables
     await run_in_threadpool(init_payroll_tables)
     print(">> Payroll tables ready")
+
+    # Initialize CFO isolation tables
+    from app.cfo.db import init_cfo_tables
+    await run_in_threadpool(init_cfo_tables)
+    print(">> CFO tables ready")
 
     # Step 15: Enforce approved run guardrail in production
     from app.guardrails import enforce_approved_run
@@ -660,6 +669,7 @@ async def startup_event():
     print(">> P0: Profile Completion at /api/profile/complete, /api/profile/status (atomic, idempotent, onboarding unblock)")
     print(">> PHASE 7: Audit Exports at /api/audit-exports/package (manual-run, RBAC fail-closed, org-isolated)")
     print(">> PHASE 7.1: Plaid Products at /api/plaid/assets, /api/plaid/statements, /api/plaid/identity, /api/plaid/income, /api/plaid/investments, /api/plaid/liabilities, /api/plaid/enrich (manual-run, org-isolated)")
+    print(">> CFO DATA: Accounts at /api/cfo/accounts, Transactions at /api/cfo/transactions (isolated from core_transactions)")
     set_startup_time()
     print(">> Sentry initialized" if os.getenv("SENTRY_DSN") else ">> WARNING: Sentry not configured")
 

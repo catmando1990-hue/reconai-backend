@@ -26,6 +26,7 @@ from uuid import uuid4
 
 from ..db import DB_PATH
 from app.auth_context import get_current_context, AuthContext
+from app.cfo import db as cfo_db
 
 router = APIRouter(prefix="/api/cfo", tags=["CFO Dashboard"])
 
@@ -173,76 +174,40 @@ def _calculate_trend(current: float, previous: float) -> MetricTrend:
 
 
 def _get_period_totals(
-    conn,
+    conn,  # Keep for backwards compatibility, but we use cfo_db instead
     org_id: str,
     start_date: str,
     end_date: str
 ) -> Dict[str, float]:
-    """Get revenue and expense totals for a period"""
-    # Revenue: positive amounts (income)
-    cursor = conn.execute("""
-        SELECT COALESCE(SUM(amount), 0) as total
-        FROM core_transactions
-        WHERE organization_id = ?
-          AND date >= ? AND date <= ?
-          AND amount > 0
-    """, (org_id, start_date, end_date))
-    revenue = cursor.fetchone()[0] or 0.0
-
-    # Expenses: negative amounts
-    cursor = conn.execute("""
-        SELECT COALESCE(SUM(ABS(amount)), 0) as total
-        FROM core_transactions
-        WHERE organization_id = ?
-          AND date >= ? AND date <= ?
-          AND amount < 0
-    """, (org_id, start_date, end_date))
-    expenses = cursor.fetchone()[0] or 0.0
-
-    return {
-        "revenue": revenue,
-        "expenses": expenses,
-        "net": revenue - expenses
-    }
+    """Get revenue and expense totals for a period from CFO-ISOLATED data."""
+    # Use CFO database layer instead of core_transactions
+    return cfo_db.get_period_totals(org_id, start_date, end_date)
 
 
 def _get_top_sources(
-    conn,
+    conn,  # Keep for backwards compatibility, but we use cfo_db instead
     org_id: str,
     start_date: str,
     end_date: str,
     is_revenue: bool,
     limit: int = 5
 ) -> List[Dict[str, Any]]:
-    """Get top revenue sources or expense categories"""
+    """Get top revenue sources or expense categories from CFO-ISOLATED data."""
     if is_revenue:
-        condition = "amount > 0"
+        results = cfo_db.get_top_revenue_sources(org_id, start_date, end_date, limit)
     else:
-        condition = "amount < 0"
+        results = cfo_db.get_top_expense_categories(org_id, start_date, end_date, limit)
 
-    cursor = conn.execute(f"""
-        SELECT
-            COALESCE(merchant_normalized, category, 'Other') as source,
-            COUNT(*) as transaction_count,
-            COALESCE(SUM(ABS(amount)), 0) as total
-        FROM core_transactions
-        WHERE organization_id = ?
-          AND date >= ? AND date <= ?
-          AND {condition}
-        GROUP BY source
-        ORDER BY total DESC
-        LIMIT ?
-    """, (org_id, start_date, end_date, limit))
-
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "source": row[0],
-            "transaction_count": row[1],
-            "total": round(row[2], 2)
+    # Format results to match expected structure
+    formatted = []
+    for row in results:
+        formatted.append({
+            "source": row.get("source") or row.get("category", "Other"),
+            "transaction_count": row.get("transaction_count", 0),
+            "total": round(row.get("total", 0), 2)
         })
 
-    return results
+    return formatted
 
 
 def _log_export_audit(
@@ -388,14 +353,8 @@ async def get_cfo_overview(
             expense_trend = _calculate_trend(current["expenses"], previous["expenses"])
             net_trend = _calculate_trend(current["net"], previous["net"])
 
-            # Get current cash balance (sum of all transactions)
-            cursor = conn.execute("""
-                SELECT COALESCE(SUM(amount), 0) as balance
-                FROM core_transactions
-                WHERE organization_id = ?
-                  AND date <= ?
-            """, (org_id, end_date))
-            cash_balance = cursor.fetchone()[0] or 0.0
+            # Get current cash balance from CFO-ISOLATED data
+            cash_balance = cfo_db.get_cash_balance(org_id, end_date)
 
             # Top sources
             top_revenue = _get_top_sources(conn, org_id, start_date, end_date, is_revenue=True)

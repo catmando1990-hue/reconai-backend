@@ -8,6 +8,10 @@ Read-only financial analytics:
 - Forecast projections with confidence gating
 - Financial exception detection
 
+CFO Data Isolation:
+- Separate data silo for CFO tier (cfo_accounts, cfo_transactions, etc.)
+- No cross-tier data access (CFO never reads core_transactions)
+
 CANONICAL LAWS:
 - No auto-refresh
 - No background jobs
@@ -25,6 +29,7 @@ from app.cfo.models import (
     ForecastResponse,
     ExceptionsResponse,
 )
+from app.cfo import db
 
 __all__ = [
     "CFOEngine",
@@ -35,4 +40,5 @@ __all__ = [
     "CFOOverviewResponse",
     "ForecastResponse",
     "ExceptionsResponse",
+    "db",
 ]
